@@ -64,7 +64,6 @@ def generate_prompt(merge_fields, conga_fields, schema_chunk):
         "Respond in CSV format with the following columns: CongaField,BoxField,FieldType."
     )
     return prompt
-
 def call_box_ai(prompt, developer_token):
     url = "https://api.box.com/2.0/ai/prompts"
     headers = {
@@ -72,14 +71,17 @@ def call_box_ai(prompt, developer_token):
         "Content-Type": "application/json"
     }
     data = {
-        "prompt": prompt,
-        "model": "gpt-4"
+        "model": "gpt-4",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant that maps Conga fields to Box metadata fields."},
+            {"role": "user", "content": prompt}
+        ]
     }
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 200:
         return response.json().get("text", "")
     else:
-        st.error(f"Box AI request failed: {response.status_code}")
+        st.error(f"Box AI request failed: {response.status_code} — {response.text}")
         return None
 
 def convert_response_to_df(text):
