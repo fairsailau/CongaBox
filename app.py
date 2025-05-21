@@ -6,7 +6,7 @@ import re
 import io
 import requests
 from boxsdk import OAuth2, Client
-# from boxsdk.object.file import File # Not explicitly used in the provided snippet parts that are modified
+# from boxsdk.object.file import File # Not explicitly used directly
 
 st.set_page_config(page_title="Conga to Box Doc Gen", layout="centered")
 
@@ -25,8 +25,6 @@ def get_box_client():
     return client
 
 def get_folder_contents(client, folder_id):
-    # Ensure 'name' and 'parent' fields are fetched for the folder object.
-    # 'parent' is crucial for breadcrumb construction. 'name' for display.
     folder = client.folder(folder_id).get(fields=['name', 'parent'])
     items = client.folder(folder_id).get_items()
     return folder, items
@@ -34,53 +32,40 @@ def get_folder_contents(client, folder_id):
 def navigate_folders(client, current_folder_id):
     folder, items = get_folder_contents(client, current_folder_id)
     
-    # Create breadcrumbs (path to the current folder, excluding root and current folder itself)
     path_parts = []
-    ancestor_tracer = folder # Start with the current folder object
+    ancestor_tracer = folder
     
     while True:
-        # Check if the current tracer has a 'parent' attribute and it's populated
         if not hasattr(ancestor_tracer, 'parent') or not ancestor_tracer.parent:
-            # This means ancestor_tracer is root, or its parent info is not available
             break 
         
-        parent_ref = ancestor_tracer.parent  # This is a BoxMiniFolder-like object for the parent
-
+        parent_ref = ancestor_tracer.parent
         if parent_ref.id == "0":
-            # The parent is the root folder. Stop, as "Root" is handled by a separate button.
             break 
         
         try:
-            # Fetch the full parent folder object to get its name and its own parent (for the next step up)
             parent_full_obj = client.folder(parent_ref.id).get(fields=["name", "parent"])
         except Exception as e:
             st.warning(f"Could not retrieve parent folder details for ID {parent_ref.id}: {e}")
-            break # Stop breadcrumb generation if a parent folder is inaccessible
+            break
 
         path_parts.insert(0, {"id": parent_full_obj.id, "name": parent_full_obj.name})
-        
-        ancestor_tracer = parent_full_obj  # Move one level up in the hierarchy
+        ancestor_tracer = parent_full_obj
     
-    # Display breadcrumbs
-    # Number of columns: 1 for "Root" + one for each part in path_parts
     breadcrumb_cols = st.columns(len(path_parts) + 1) 
     
-    # "Root" button always navigates to folder "0"
     breadcrumb_cols[0].button("Root", key="nav_root_button", 
                               on_click=lambda: st.session_state.update({"current_folder": "0"}))
     
     for i, part in enumerate(path_parts):
-        # Use a unique key for each breadcrumb button
         breadcrumb_cols[i+1].button(
             part["name"], 
             key=f"nav_breadcrumb_{part['id']}", 
             on_click=lambda folder_id_val=part["id"]: st.session_state.update({"current_folder": folder_id_val})
         )
     
-    # Display current folder name
     st.subheader(f"Folder: {folder.name}")
     
-    # Display folder contents header
     header_cols = st.columns([0.7, 0.2, 0.1])
     header_cols[0].write("Name")
     header_cols[1].write("Type")
@@ -92,16 +77,14 @@ def navigate_folders(client, current_folder_id):
         if item.type == "folder":
             item_cols[0].write(f"📁 {item.name}")
             item_cols[1].write("Folder")
-            # Use unique key for "Open" button
             item_cols[2].button("Open", key=f"open_folder_{item.id}", 
                                 on_click=lambda folder_id_val=item.id: st.session_state.update({"current_folder": folder_id_val}))
-        else: # It's a file
+        else:
             item_cols[0].write(f"📄 {item.name}")
-            item_cols[1].write(item.type.capitalize()) # 'file' -> 'File'
+            item_cols[1].write(item.type.capitalize())
             
             file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
             
-            # Use unique keys for checkboxes
             if file_extension == 'docx':
                 selected = item_cols[2].checkbox("", key=f"select_template_{item.id}", 
                                                   value=st.session_state.get('template_file_id') == item.id)
@@ -109,7 +92,6 @@ def navigate_folders(client, current_folder_id):
                     st.session_state['template_file_id'] = item.id
                     st.session_state['template_file_name'] = item.name
                     st.session_state['template_file_type'] = 'docx'
-                # If unselected and it was the current one, logic to clear (optional, original didn't have this)
                 elif st.session_state.get('template_file_id') == item.id:
                      st.session_state.pop('template_file_id', None)
                      st.session_state.pop('template_file_name', None)
@@ -147,15 +129,11 @@ def extract_merge_fields(docx_content):
     with io.BytesIO(docx_content) as docx_bytes:
         document = Document(docx_bytes)
         fields = set()
-        pattern = r"\{\{(.*?)(\||\}\})" # Original pattern might miss fields like {{TableStart:FieldName}}
-        # A more general pattern for {{field_name}} or {{TableStart:Table}} etc.
-        # For simple merge fields like {{FieldName}}, the original is fine.
-        # Let's assume original pattern is sufficient for Conga syntax intended.
+        pattern = r"\{\{(.*?)(\||\}\})"
         for para in document.paragraphs:
             matches = re.findall(pattern, para.text)
             for match in matches:
                 fields.add(match[0].strip())
-        # Also check tables
         for table in document.tables:
             for row in table.rows:
                 for cell in row.cells:
@@ -167,21 +145,13 @@ def extract_merge_fields(docx_content):
 
 def parse_conga_query(file_content, file_type):
     if file_type == 'csv':
-        # Assuming the CSV file itself contains data, and columns are fields
-        # If CSV contains a query string, this logic needs to change
         df = pd.read_csv(io.BytesIO(file_content))
         return list(df.columns)
     else:  # txt (presumably SOQL query)
         text = file_content.decode("utf-8")
-        # This regex is basic. SOQL can be complex.
-        # SELECT Field1, Field2 FROM Object WHERE ...
-        # It might miss fields in subqueries or relationships.
         match = re.search(r"select\s+(.+?)\s+from", text, re.IGNORECASE | re.DOTALL)
         if match:
             fields_segment = match.group(1)
-            # Simple split by comma. Might not handle "Field, MAX(Amount)" or "Account.Name" correctly if just Account is needed.
-            # For "Account.Name", "Account.Name" is one field.
-            # This needs to be robust if queries are complex, e.g. using regex to find valid field names
             raw_fields = fields_segment.split(",")
             return [f.strip() for f in raw_fields if f.strip()]
         return []
@@ -193,29 +163,23 @@ def flatten_json(y, prefix=''):
             for a in x:
                 flatten(x[a], f'{name}{a}.')
         elif isinstance(x, list):
-            # If list contains dicts, you might want to handle them.
-            # This flattens list items by index: list.0.field, list.1.field
-            # For schema, sometimes lists represent choices or repeated structures not data instances.
-            # Depending on schema structure, this might need adjustment.
-            # For now, assuming this generic flattening is intended.
             for i, a in enumerate(x):
                 flatten(a, f'{name}{i}.')
         else:
-            out[name[:-1]] = str(x) # name[:-1] to remove trailing dot
+            out[name[:-1]] = str(x)
     flatten(y, prefix)
     return out
 
-def chunk_dict(d, chunk_size=50): # Default chunk size for prompt
+def chunk_dict(d, chunk_size=50):
     items = list(d.items())
     for i in range(0, len(items), chunk_size):
         yield dict(items[i:i + chunk_size])
 
 def generate_prompt(merge_fields, conga_fields, schema_chunk):
-    # Convert lists to string representations for the prompt
     merge_fields_str = ", ".join(merge_fields)
     conga_fields_str = ", ".join(conga_fields)
     
-    schema_text = "\n".join([f"- {k}: (example value: {v})" for k, v in schema_chunk.items()]) # Show example values may help AI
+    schema_text = "\n".join([f"- {k}: (example value: {v})" for k, v in schema_chunk.items()])
     
     prompt = (
         "You are an AI assistant helping map fields from a Conga document generation system to a Box Doc Gen system, "
@@ -224,7 +188,7 @@ def generate_prompt(merge_fields, conga_fields, schema_chunk):
         f"{merge_fields_str}\n\n"
         "Fields from Conga Query (likely Salesforce source fields):\n"
         f"{conga_fields_str}\n\n"
-        "Partial Salesforce Schema (Path: Example Value from a record):\n" # Clarify schema representation
+        "Partial Salesforce Schema (Path: Example Value from a record):\n"
         f"{schema_text}\n\n"
         "Task: For each 'Conga Template Merge Field', find the best matching field from the 'Salesforce Schema'. "
         "The 'Fields from Conga Query' can provide hints about the original Salesforce source of the Conga fields.\n"
@@ -238,31 +202,28 @@ def generate_prompt(merge_fields, conga_fields, schema_chunk):
     return prompt
 
 def call_box_ai(prompt, file_ids, developer_token):
-    url = "https://api.box.com/2.0/ai/ask"
+    # Use the text generation endpoint
+    url = "https://api.box.com/2.0/ai/text_gen"
     headers = {
         "Authorization": f"Bearer {developer_token}",
         "Content-Type": "application/json"
     }
-    # Ensure file_ids being passed are for the relevant context if Box AI uses them.
-    # The prompt already contains extracted info, so file_ids might be for Box AI's broader context/logging.
-    # If files are large, ensure this is the intended way to use Box AI (passing content vs. IDs).
+    # The /ai/text_gen endpoint does not use a "mode" parameter in the top-level payload.
+    # It also typically expects "text_content" for the content_type of items if they are text.
     data = {
-        "mode": "text_gen", # Explicitly set mode if available/needed by Box AI
         "prompt": prompt,
-        "items": [{"type": "file", "id": file_id, "content_type": "text/plain"} for file_id in file_ids if file_id] # Assuming text context
-        # If Box AI can read docx, csv, json directly, content_type could be more specific, or Box infers.
-        # The prompt itself contains the necessary data, so items might be optional or for grounding.
+        "items": [
+            {"type": "file", "id": file_id, "content_type": "text_content"}  # Adjusted content_type
+            for file_id in file_ids if file_id
+        ]
+        # "dialogue_history": [] # Optional: include if managing conversational context
     }
     
-    # If 'items' are not actually used by Box AI for this prompt (since data is in prompt_text),
-    # they could be omitted to simplify or if they cause issues.
-    # For this use case, prompt has all info. Let's try without 'items' if it's problematic.
-    # For now, keeping it as per original.
-
     response = requests.post(url, headers=headers, json=data)
+    
     if response.status_code == 200:
-        # Assuming the answer is directly in response.json()["answer"]
-        return response.json().get("answer", "")
+        # For /ai/text_gen, the answer is typically in response.json()["completion"]
+        return response.json().get("completion", "")
     else:
         st.error(f"Box AI request failed: {response.status_code} — {response.text}")
         return None
@@ -274,10 +235,9 @@ def convert_response_to_df(text):
 
     lines = text.strip().splitlines()
     
-    # Find header row, robustly
     header_idx = -1
     for i, line in enumerate(lines):
-        if "CongaField" in line and "BoxField" in line: # Check for key column names
+        if "CongaField" in line and "BoxField" in line:
             header_idx = i
             break
     
@@ -292,11 +252,10 @@ def convert_response_to_df(text):
     data = []
     for line in data_lines:
         split_line = [val.strip() for val in line.split(",")]
-        if len(split_line) == len(header): # Ensure correct number of columns
+        if len(split_line) == len(header):
             data.append(split_line)
-        elif len(split_line) > len(header): # If values contain commas
-             # Try to reconstruct, assuming CongaField is first, BoxField second, rest is FieldType
-            if len(split_line) >= 2: # At least CongaField and BoxField parts
+        elif len(split_line) > len(header):
+            if len(split_line) >= 2:
                 data.append([split_line[0], split_line[1], ",".join(split_line[2:])])
             else:
                 st.warning(f"Skipping malformed CSV line: {line}")
@@ -313,7 +272,7 @@ def convert_response_to_df(text):
 
 # Initialize session state
 if 'current_folder' not in st.session_state:
-    st.session_state['current_folder'] = "0"  # Root folder
+    st.session_state['current_folder'] = "0"
 
 st.title("Conga Template to Box Doc Gen Mapper")
 
@@ -323,11 +282,9 @@ with st.sidebar:
     
     try:
         client = get_box_client()
-        # Pass client and current_folder_id to navigate_folders
         navigate_folders(client, st.session_state['current_folder']) 
         
         st.subheader("Selected Files")
-        # Display selected files (robustly checking if keys exist)
         st.write(f"Template: {st.session_state.get('template_file_name', 'Not selected')}")
         st.write(f"Query: {st.session_state.get('query_file_name', 'Not selected')}")
         st.write(f"Schema: {st.session_state.get('schema_file_name', 'Not selected')}")
@@ -345,12 +302,8 @@ if st.button("Generate Field Mapping"):
     st.info("Processing selected files and generating mapping...")
     
     try:
-        # Ensure client is available from sidebar try-except block
-        # If client failed, this button click should ideally not proceed or re-check.
-        # Assuming client is valid if we reach here.
-        if 'client' not in locals() or client is None: # Defensive check
+        if 'client' not in locals() or client is None:
              client = get_box_client()
-
 
         template_content = download_box_file(client, st.session_state['template_file_id'])
         query_content = download_box_file(client, st.session_state['query_file_id'])
@@ -380,14 +333,12 @@ if st.button("Generate Field Mapping"):
         else:
             st.warning("Schema file was empty or could not be flattened.")
         
-        # File IDs for Box AI context (if used by the AI model for grounding)
-        # The prompt already contains extracted data, so these might be optional for the AI call.
         context_file_ids = [
             st.session_state.get('template_file_id'),
             st.session_state.get('query_file_id'),
             st.session_state.get('schema_file_id')
         ]
-        context_file_ids = [fid for fid in context_file_ids if fid] # Filter out None values
+        context_file_ids = [fid for fid in context_file_ids if fid]
 
         full_mapping_df = pd.DataFrame()
         
@@ -395,19 +346,16 @@ if st.button("Generate Field Mapping"):
             st.error("Cannot generate mapping without merge fields from the template.")
             st.stop()
 
-        # Using a smaller chunk size for schema in prompt as it can be verbose.
-        # The Box AI token limit for the prompt needs to be considered.
-        # Max schema fields per call can be adjusted.
-        schema_chunk_size = 30 # Adjust based on typical path/value length and token limits
+        schema_chunk_size = 30 
+        num_chunks = (len(flat_schema) + schema_chunk_size - 1) // schema_chunk_size if flat_schema else 1
+        progress_bar = st.progress(0.0)
 
         for i, schema_chunk in enumerate(chunk_dict(flat_schema, chunk_size=schema_chunk_size)):
-            st.info(f"Calling Box AI (part {i+1} of schema)...")
+            st.info(f"Calling Box AI (part {i+1} of {num_chunks} schema chunks)...")
+            progress_bar.progress( (i +1) / num_chunks , text=f"Processing schema chunk {i+1}/{num_chunks}")
+
             prompt_text = generate_prompt(merge_fields, conga_fields, schema_chunk)
             
-            # For debugging the prompt:
-            # with st.expander(f"Prompt for Schema Chunk {i+1}"):
-            #    st.text(prompt_text)
-
             ai_response_text = call_box_ai(prompt_text, context_file_ids, st.secrets["box"]["BOX_DEVELOPER_TOKEN"])
             
             if ai_response_text:
@@ -417,10 +365,10 @@ if st.button("Generate Field Mapping"):
             else:
                 st.warning(f"No response or error from Box AI for schema chunk {i+1}.")
         
+        progress_bar.empty() # Clear the progress bar after completion or error
+
         if not full_mapping_df.empty:
-            # Post-processing: Deduplicate and potentially rank/select best matches if AI gives multiple for one CongaField
             full_mapping_df.drop_duplicates(subset=['CongaField', 'BoxField'], inplace=True)
-            # A more sophisticated merge/ranking could be added here if AI provides multiple options per CongaField across chunks.
             
             st.subheader("Generated Field Mapping")
             st.dataframe(full_mapping_df)
@@ -438,6 +386,5 @@ if st.button("Generate Field Mapping"):
     
     except Exception as e:
         st.error(f"An error occurred during processing: {str(e)}")
-        # For debugging, show more details if possible
         import traceback
         st.text(traceback.format_exc())
