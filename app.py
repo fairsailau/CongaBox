@@ -65,15 +65,14 @@ def generate_prompt(merge_fields, conga_fields, schema_chunk):
     )
     return prompt
 def call_box_ai(prompt, developer_token):
-    url = "https://api.box.com/2.0/ai/prompts"
+    url = "https://api.box.com/2.0/ai/ask"
     headers = {
         "Authorization": f"Bearer {developer_token}",
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-4",
+        "mode": "single_item_qa",
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant that maps Conga fields to Box metadata fields."},
             {"role": "user", "content": prompt}
         ]
     }
