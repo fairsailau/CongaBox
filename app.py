@@ -17,7 +17,7 @@ ALL_MODELS_WITH_DESC = {
     "azure__openai__gpt_4o_mini": "Azure OpenAI GPT-4o Mini: Lightweight multimodal model",
     "azure__openai__gpt_4o": "Azure OpenAI GPT-4o: Highly efficient multimodal model for complex tasks",
     "azure__openai__gpt_4_1": "Azure OpenAI GPT-4.1: Highly efficient multimodal model for complex tasks",
-    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks", 
+    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks",
     "azure__openai__gpt_o4-mini": "Azure OpenAI GPT o4-mini: Highly efficient multimodal model for complex tasks",
     "google__gemini_2_5_pro_preview": "Google Gemini 2.5 Pro: Optimal for high-volume, high-frequency tasks (Preview)",
     "google__gemini_2_5_flash_preview": "Google Gemini 2.5 Flash: Optimal for high-volume, high-frequency tasks (Preview)",
@@ -168,7 +168,9 @@ def extract_merge_fields(docx_content):
                     for para_in_cell in cell.paragraphs:
                         matches = re.findall(pattern, para_in_cell.text)
                         for match_text in matches: raw_fields.add(match_text.strip())
+        
         cleaned_fields = {re.split(r'\s*(?:\\@|\||&)', f, maxsplit=1)[0].strip() for f in raw_fields}
+        
         if len(raw_fields) != len(cleaned_fields) or any(r != c for r, c in zip(sorted(list(raw_fields)), sorted(list(cleaned_fields)))):
             st.info(f"Cleaned merge fields. Original: {len(raw_fields)}. Core: {len(cleaned_fields)}")
         return list(cleaned_fields)
@@ -183,11 +185,14 @@ def parse_conga_query(file_content, file_type):
         for query_text_item in query_text_list:
             query_text_item = str(query_text_item).strip()
             if not query_text_item: continue
+            
             from_match = re.search(r"from\s+([a-zA-Z0-9_]+(?:__c|__r)?)\b", query_text_item, re.IGNORECASE)
             current_sobject_from_query = from_match.group(1) if from_match else None
+            
             if current_sobject_from_query:
                 all_unique_sobjects.add(current_sobject_from_query)
                 sobject_to_fields_map.setdefault(current_sobject_from_query, set())
+
             if "select " in query_text_item.lower() and " from " in query_text_item.lower():
                 processed_queries_count +=1
                 select_match = re.search(r"select\s+(.+?)\s+from", query_text_item, re.IGNORECASE | re.DOTALL)
@@ -203,26 +208,32 @@ def parse_conga_query(file_content, file_type):
     queries_to_parse = []
     if file_type == 'csv':
         try:
-            df_read = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], skip_blank_lines=True)
+            df_read = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], skip_blank_lines=True) 
             if isinstance(df_read, pd.DataFrame):
                 df_series = df_read.iloc[:, 0] if not df_read.empty else pd.Series(dtype=str)
-            else: df_series = df_read
-            if not df_series.empty: queries_to_parse = df_series.dropna().astype(str).tolist()
+            else: 
+                df_series = df_read
+            
+            if not df_series.empty:
+                queries_to_parse = df_series.dropna().astype(str).tolist()
+            
             if queries_to_parse: st.info(f"CSV: Processing {len(queries_to_parse)} lines from first column as SOQL.")
             else:
-                st.warning("CSV: No queries in first column. Using headers as fields if available.")
+                st.warning("CSV: No queries in first column after parsing. Using headers as fields if available.")
                 df_headers = pd.read_csv(io.BytesIO(file_content), nrows=0) 
                 all_unique_fields.update([str(col).strip() for col in df_headers.columns])
                 if all_unique_fields: 
                     sobject_to_fields_map["UnknownFromCSVHeaders"] = set(all_unique_fields)
                     st.info(f"CSV (Fallback): Using column headers as query fields: {list(all_unique_fields)}")
                 return {k: sorted(list(v)) for k,v in sobject_to_fields_map.items()}, all_unique_fields, all_unique_sobjects
-        except Exception as e: st.error(f"Error parsing CSV: {e}. Trying as TXT."); return parse_conga_query(file_content, 'txt')
+        except Exception as e:
+            st.error(f"Error parsing CSV: {e}. Trying as TXT."); return parse_conga_query(file_content, 'txt')
     elif file_type == 'txt':
         text_content = file_content.decode("utf-8")
         queries_to_parse = [q.strip() for q in re.split(r';\s*\n?|\n\s{2,}\n?|\n\s*$', text_content, flags=re.MULTILINE) if q.strip()]
         if queries_to_parse: st.info(f"TXT: Found {len(queries_to_parse)} potential SOQL.")
     else: st.error(f"Unsupported query file type: {file_type}"); return {}, set(), set()
+
     processed_count = extract_from_soql_list(queries_to_parse) if queries_to_parse else 0
     msg_type = file_type.upper()
     if processed_count > 0: st.success(f"{msg_type}: Processed {processed_count} SOQL. Fields: {len(all_unique_fields)}, SObjects: {len(all_unique_sobjects)}.")
@@ -249,24 +260,32 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
                 if len(possible_sources) > 1: break 
         hint = f" (Hint: Likely from SObject(s) - {'; '.join(possible_sources)[:200]})" if possible_sources else ""
         merge_fields_str_list.append(f"- {mf}{hint}")
+
     detailed_merge_fields_list = "\n".join(merge_fields_str_list)
     all_query_sobjects_str = ", ".join(sorted(list(all_query_sobjects))) if all_query_sobjects else "Not specified, use full schema"
+
     prompt = (
         "You are an AI assistant helping map fields from a Conga document generation system to a Box Doc Gen system. "
-        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API call). Use this schema file as the primary source of truth for Salesforce field paths and their data types.\n\n"
+        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API call). Use this schema file as the PRIMARY and SOLE source of truth for valid Salesforce field paths and their data types.\n\n"
         "Conga Template Merge Fields to Map (each with a hint about potential source SObjects based on associated Conga queries):\n"
         f"{detailed_merge_fields_list}\n\n"
-        "Primary Salesforce SObjects involved in the source Conga queries (consult the provided schema file for their fields and relationships):\n"
+        "Primary Salesforce SObjects involved in the source Conga queries (consult the provided schema file for their detailed structure and relationships):\n"
         f"{all_query_sobjects_str}\n\n"
+        "IMPORTANT INSTRUCTIONS:\n"
+        "1. Schema Adherence: ALL BoxField paths MUST originate from the provided schema file. Do not invent fields or relationships.\n"
+        "2. Custom Fields: Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc', it might map to a Salesforce field ending in '__c' or '__pc'. Verify against the schema.\n"
+        "3. Person Accounts: If the schema indicates Person Account fields (e.g., Account.PersonEmail, Account.PersonBirthdate - standard fields, not custom), map 'ACCOUNT_PERSON...' CongaFields accordingly. These standard Person Account fields do NOT end in '__c'.\n"
+        "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should map to fields on the '$User' global object (e.g., '$User.City') IF in the schema. If context implies a user from a related record (e.g., 'Matter_Team_Members__c.User__r'), use that full path from the schema.\n"
+        "5. System Fields: For fields like 'Today', use system variables like '$System.Today' if appropriate and inferable from schema context as a Date/DateTime.\n\n"
         "TASK:\n"
-        "For EACH 'Conga Template Merge Field' listed above, provide its corresponding Salesforce field path from the schema file. Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc', it might map to a Salesforce field ending in '__c' or '__pc'. For fields like 'Today' or user-specific details, consider system variables like '$System.Today' or fields from the '$User' object (e.g., '$User.FirstName') if they exist in the schema.\n"
-        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data, starting with the header row 'CongaField,BoxField,FieldType', followed by data rows. Do NOT include any explanations, notes, apologies, or text outside this CSV data. Each CongaField from the input list must appear exactly once in your CSV output.\n"
-        "If a CongaField 'Conga_NoMatch_Field' cannot be mapped, the output row MUST be: Conga_NoMatch_Field,,\n\n"
-        "CSV Columns:\n"
-        "1. CongaField: The exact Conga merge field (from the list above, without the hint).\n"
-        "2. BoxField: The full, valid path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode). Use '$' prefix for global objects like $User or $Organization if present in the schema. If traversing relationships, ensure the path is valid according to the schema (e.g., Contact.Account.Name).\n"
-        "3. FieldType: The data type (e.g., Text, Number, Date, Boolean, Picklist, Id, RichText, Lookup, MasterDetail) from the schema for the BoxField.\n"
-        "If a match is not clear in the schema for a CongaField, even after considering relationships suggested by the hints or schema structure, leave the BoxField and FieldType columns BLANK. Do not invent field paths.\n"
+        "For EACH 'Conga Template Merge Field' from the list above, provide its corresponding Salesforce field path from the schema file. "
+        "Use the hints next to each merge field and the SObject list to guide your search within the schema. The hints are suggestions; the schema file is authoritative.\n"
+        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data. Start with the exact header row 'CongaField,BoxField,FieldType', followed by data rows. Each CongaField from the input list must appear exactly once in your CSV output on its own row. Each data row MUST have exactly three values separated by single commas. Do NOT include ANY text, notes, explanations, apologies, or conversational remarks before, after, or within the CSV data cells themselves. If you are uncertain about a mapping for a CongaField, output the CongaField name in the first column, and leave the BoxField and FieldType columns COMPLETELY BLANK for that row. Example of a blank mapping: 'UncertainCongaField,,'\n\n"
+        "CSV Columns Definition:\n"
+        "1. CongaField: The exact Conga merge field (from the list above, without the hint part).\n"
+        "2. BoxField: The full, valid path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode, Contact.Account.Name). Use '$' prefix for global objects like $User or $Organization if present in the schema.\n"
+        "3. FieldType: The data type (e.g., Text, Number, Date, Boolean, Picklist, Id, RichText, Lookup, MasterDetail, Email, Phone, Date, DateTime, Currency) from the schema for the BoxField.\n"
+        "If a match is not clear in the schema for a CongaField, leave its BoxField and FieldType columns BLANK. Do not invent field paths.\n"
         "Prioritize exact or very close name matches within the relevant SObject contexts identified by the hints.\n"
         "Example Row: Template_Account_Name,Account.Name,Text"
     )
@@ -279,11 +298,13 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
     data = {"prompt": prompt, "items": items_payload}
     model_used_msg = "Using default Box AI model."
     if model_id: data["model"] = model_id; model_used_msg = f"Using Box AI model: {model_id}"
+    
     st.info(model_used_msg); 
     displayed_data = data.copy()
     if len(json.dumps(displayed_data.get("prompt", ""))) > 1000:
         displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display for brevity)"
     st.info("Box AI Request Payload (see console for full details if large):"); st.json(displayed_data) 
+
     print(f"--- Sending Box AI Request ---\nURL: {url}\nModel: {data.get('model', 'Default')}\nPayload Len: {len(json.dumps(data))}\n-----------------------------")
     response = requests.post(url, headers=headers, json=data)
     print(f"--- Received Box AI Response (Status: {response.status_code}) ---")
@@ -299,51 +320,57 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
 
 def convert_response_to_df(text):
     if not text or not isinstance(text, str): st.warning("AI response empty/invalid."); return pd.DataFrame()
-    csv_match = re.search(r"```csv\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    csv_match = re.search(r"```(?:csv)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     csv_text = csv_match.group(1).strip() if csv_match else text.strip()
     if csv_match: st.info("Extracted CSV block from AI response.")
     else: st.info("No CSV markdown block found, parsing response as is.")
     lines = csv_text.strip().splitlines()
     header_idx = -1; expected_hdrs_check = ["CongaField", "BoxField"]
     for i, line in enumerate(lines):
-        if all(eh.lower() in line.lower() for eh in expected_hdrs_check): header_idx = i; break
+        line_lower = line.lower()
+        if all(eh.lower() in line_lower for eh in expected_hdrs_check) and \
+           not any(mf_prefix.lower() in line_lower for mf_prefix in ["account_", "case_", "contact_", "user_"]):
+            header_idx = i; break
     final_cols = ["CongaField", "BoxField", "FieldType"]
     if header_idx == -1:
-        st.warning(f"CSV header (CongaField, BoxField) not found."); st.text_area("Processed AI Text", csv_text, height=100)
-        return pd.DataFrame(columns=final_cols)
+        st.warning(f"CSV header (CongaField, BoxField) not reliably found.")
+        for i, line in enumerate(lines): # Attempt to find any line that could be a header
+            if line.strip() and not re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV", line, re.IGNORECASE):
+                header_idx = i; st.info(f"Using line {i+1} as potential header: '{line}'"); break
+        if header_idx == -1: 
+            st.error("No plausible header line found."); st.text_area("Processed AI Text", csv_text, height=100)
+            return pd.DataFrame(columns=final_cols)
+
     header_from_ai_raw = [h.strip() for h in lines[header_idx].split(",")]
+    # Pad or truncate AI header to match our expected 3 columns
+    if len(header_from_ai_raw) < len(final_cols): header_from_ai_raw.extend([""] * (len(final_cols) - len(header_from_ai_raw)))
+    elif len(header_from_ai_raw) > len(final_cols): header_from_ai_raw = header_from_ai_raw[:len(final_cols)]
+
     data_list = []
     for line_num, line_content in enumerate(lines[header_idx+1:]):
         line_content_s = line_content.strip()
         if not line_content_s: continue
-        if re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV", line_content_s, re.IGNORECASE) or \
-           (not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '('] and line_content_s.count(',') < min(1, len(final_cols)-2) ): # Use final_cols here
+        if re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV|^\s*Example Row:", line_content_s, re.IGNORECASE) or \
+           (not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '('] and line_content_s.count(',') == 0 and len(line_content_s) < 20) :
             if line_content_s: st.info(f"Skipping non-data line: '{line_content_s}'"); continue
+        
         split_vals = [v.strip() for v in line_content_s.split(",")]
-        # Heuristic for space-separated values if comma split yields too few columns for the actual content
-        if len(split_vals) < len(final_cols) and line_content_s.count(',') < 2 and len(re.split(r'\s{2,}', line_content_s)) >= 2 :
+        if len(split_vals) == 1 and line_content_s.count(',') == 0 and len(re.split(r'\s{2,}', line_content_s)) >= 2 :
             alt_split_vals = re.split(r'\s{2,}', line_content_s)
-            if len(alt_split_vals) >=2 and len(alt_split_vals) <=len(final_cols): # Plausible number of columns
-                st.info(f"Line '{line_content_s}' has few commas, attempting split by multiple spaces -> {alt_split_vals}")
+            if len(alt_split_vals) >=2 and len(alt_split_vals) <=len(final_cols):
+                st.info(f"Line '{line_content_s}' has few commas, using multi-space split -> {alt_split_vals}")
                 split_vals = alt_split_vals
-        row_data = {col: "" for col in final_cols} 
-        mapped_successfully_by_header_name = False
-        temp_ai_headers_lower = [h.lower() for h in header_from_ai_raw]
-        for i_expected, expected_col_name in enumerate(final_cols):
-            try:
-                ai_col_idx = temp_ai_headers_lower.index(expected_col_name.lower())
-                if ai_col_idx < len(split_vals):
-                    if expected_col_name == final_cols[-1] and ai_col_idx < len(split_vals) and len(split_vals) > len(header_from_ai_raw):
-                        row_data[expected_col_name] = ",".join(split_vals[ai_col_idx:])
-                    else: row_data[expected_col_name] = split_vals[ai_col_idx]
-                    mapped_successfully_by_header_name = True 
-            except ValueError: pass
-        if not mapped_successfully_by_header_name or not row_data["CongaField"]:
-            if len(split_vals) >= 1: row_data["CongaField"] = split_vals[0]
-            if len(split_vals) >= 2: row_data["BoxField"] = split_vals[1]
-            if len(split_vals) >= 3: row_data["FieldType"] = ",".join(split_vals[2:])
-        if row_data["CongaField"]: data_list.append(row_data)
-        elif any(row_data.values()): st.info(f"Skipping row with empty CongaField: {row_data}")
+        
+        row_data_ordered = [""] * len(final_cols)
+        for i_val in range(len(final_cols)):
+            if i_val < len(split_vals):
+                if i_val == len(final_cols) - 1 and len(split_vals) > len(final_cols):
+                    row_data_ordered[i_val] = ",".join(split_vals[i_val:])
+                else: row_data_ordered[i_val] = split_vals[i_val]
+        
+        if row_data_ordered[0]: data_list.append(dict(zip(final_cols, row_data_ordered)))
+        elif any(val for val in row_data_ordered): st.info(f"Skipping row with empty CongaField: {row_data_ordered}")
+            
     if not data_list: st.warning("No valid data rows extracted."); return pd.DataFrame(columns=final_cols)
     return pd.DataFrame(data_list, columns=final_cols)
 
