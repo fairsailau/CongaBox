@@ -76,6 +76,7 @@ def navigate_folders(client, current_folder_id):
         if item.type == "folder":
             item_cols[0].write(f"📁 {item.name}")
             item_cols[1].write("Folder")
+            # Provide a descriptive label, hidden for cleaner UI if needed (requires newer Streamlit for label_visibility)
             item_cols[2].button("Open", key=f"open_folder_{item.id}", 
                                 on_click=lambda folder_id_val=item.id: st.session_state.update({"current_folder": folder_id_val}))
         else:
@@ -84,6 +85,10 @@ def navigate_folders(client, current_folder_id):
             
             file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
             
+            # For checkboxes, an empty label "" is used. 
+            # To fix warnings: item_cols[2].checkbox(label=" ", key=..., label_visibility="collapsed")
+            # but label_visibility requires Streamlit 1.17+. Current logs show older version.
+            # For now, empty labels are functional.
             if file_extension == 'docx':
                 selected = item_cols[2].checkbox("", key=f"select_template_{item.id}", 
                                                   value=st.session_state.get('template_file_id') == item.id)
@@ -146,11 +151,34 @@ def parse_conga_query(file_content, file_type):
     if file_type == 'csv':
         try:
             df = pd.read_csv(io.BytesIO(file_content))
-            return list(df.columns)
+            query_headers = list(df.columns)
+
+            if len(query_headers) == 1 and \
+               "select " in query_headers[0].lower() and \
+               " from " in query_headers[0].lower():
+                
+                st.info("Attempting to parse SOQL query found in CSV header.")
+                text = query_headers[0] 
+                match = re.search(r"select\s+(.+?)\s+from", text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    fields_segment = match.group(1)
+                    raw_fields = [f.strip() for f in fields_segment.split(",")]
+                    parsed_fields = [f for f in raw_fields if f] 
+                    if parsed_fields:
+                        st.success(f"Successfully parsed fields from SOQL in CSV header: {len(parsed_fields)} fields found.")
+                        return parsed_fields
+                    else:
+                        st.warning("SOQL in CSV header matched regex, but no fields were extracted. Using full query string as field name.")
+                        return query_headers 
+                else:
+                    st.warning("CSV header looks like SOQL but could not be parsed for individual fields. Using full query string as field name.")
+                    return query_headers 
+            else: 
+                return query_headers 
         except Exception as e:
-            st.warning(f"Could not parse CSV query file: {e}")
+            st.warning(f"Could not parse CSV query file: {e}. Defaulting to empty field list.")
             return []
-    else:  # txt (presumably SOQL query)
+    else:  # txt 
         text = file_content.decode("utf-8")
         match = re.search(r"select\s+(.+?)\s+from", text, re.IGNORECASE | re.DOTALL)
         if match:
@@ -206,30 +234,37 @@ def generate_prompt(merge_fields, conga_fields, schema_chunk):
     )
     return prompt
 
-def call_box_ai(prompt, file_ids_ignored, developer_token): # file_ids_ignored as it's not used for items
+def call_box_ai(prompt, grounding_file_id, developer_token):
     url = "https://api.box.com/2.0/ai/text_gen"
     headers = {
         "Authorization": f"Bearer {developer_token}",
         "Content-Type": "application/json"
     }
     
+    items_payload = []
+    if grounding_file_id:
+        items_payload.append({
+            "type": "file",
+            "id": str(grounding_file_id), 
+            "content_type": "text_content"
+        })
+    else:
+        st.error("CRITICAL: grounding_file_id was not provided to call_box_ai, but API requires it.")
+        # API will likely fail again if items_payload is empty and it's required.
+
     data = {
         "prompt": prompt,
-        "items": []  # Corrected: Send an empty list as /ai/text_gen items array takes 0 or 1 item
-        # "dialogue_history": [] # Optional
+        "items": items_payload
     }
     
-    # Debugging: Show the payload in Streamlit UI and print to console
     st.info("Box AI Request Payload (see console/logs for full details if truncated in UI):")
-    st.json(data) # Shows in Streamlit UI, might be truncated if large
-    
-    # For more complete server-side logging
+    st.json(data) 
     print("--- Sending Box AI Request ---")
     try:
         print(f"URL: {url}")
         print(f"Headers: {json.dumps(headers, indent=2)}")
         print(f"Payload: {json.dumps(data, indent=2)}")
-    except TypeError: # Handle cases where data might not be fully serializable for pretty print
+    except TypeError:
         print(f"Payload (raw, error during json.dumps for logging): {data}")
     print("-----------------------------")
 
@@ -238,18 +273,17 @@ def call_box_ai(prompt, file_ids_ignored, developer_token): # file_ids_ignored a
     print(f"--- Received Box AI Response ---")
     print(f"Status Code: {response.status_code}")
     try:
-        # Attempt to pretty print JSON response if available and valid
         response_json = response.json()
         print(f"Response Body: {json.dumps(response_json, indent=2)}")
     except json.JSONDecodeError:
-        print(f"Response Body (Non-JSON): {response.text}") # Print as text if not JSON
+        print(f"Response Body (Non-JSON): {response.text}")
     except Exception as e:
         print(f"Could not process Box AI response for logging: {e}")
         print(f"Raw Response Text: {response.text}")
     print("-----------------------------")
 
     if response.status_code == 200:
-        return response.json().get("completion", "") # ai/text_gen usually returns in "completion"
+        return response.json().get("completion", "")
     else:
         st.error(f"Box AI request failed: {response.status_code} — {response.text}")
         return None
@@ -263,7 +297,7 @@ def convert_response_to_df(text):
     
     header_idx = -1
     for i, line in enumerate(lines):
-        if "CongaField" in line and "BoxField" in line: # Basic header check
+        if "CongaField" in line and "BoxField" in line:
             header_idx = i
             break
     
@@ -278,11 +312,9 @@ def convert_response_to_df(text):
     data = []
     for line in data_lines:
         split_line = [val.strip() for val in line.split(",")]
-        # Ensure robust parsing if FieldType or other fields might contain commas
         if len(split_line) == len(header):
             data.append(split_line)
-        elif len(split_line) > len(header) and len(header) == 3: # Assuming 3 expected columns
-             # Greedily assign to first two, rest to third
+        elif len(split_line) > len(header) and len(header) == 3:
             data.append([split_line[0], split_line[1], ",".join(split_line[2:])])
         else:
             st.warning(f"Skipping malformed CSV line (expected {len(header)} columns, got {len(split_line)}): {line}")
@@ -303,7 +335,7 @@ st.title("Conga Template to Box Doc Gen Mapper")
 with st.sidebar:
     st.header("Box File Browser")
     try:
-        client = get_box_client() # Initialize client here to ensure it's available
+        client = get_box_client()
         navigate_folders(client, st.session_state['current_folder']) 
         
         st.subheader("Selected Files")
@@ -314,10 +346,10 @@ with st.sidebar:
     except Exception as e:
         st.error(f"Error connecting to Box or browsing folders: {str(e)}")
         st.caption("Please check your Box credentials in secrets and network. Client may not be initialized.")
-        client = None # Ensure client is None if initialization failed
+        client = None 
 
 if st.button("Generate Field Mapping"):
-    if 'client' not in locals() or client is None: # Check if client was initialized in sidebar
+    if 'client' not in locals() or client is None:
         st.error("Box client not initialized. Please check Box connection in the sidebar.")
         st.stop()
 
@@ -337,14 +369,13 @@ if st.button("Generate Field Mapping"):
             st.success(f"Extracted {len(merge_fields)} merge fields from template: {', '.join(merge_fields[:5])}{'...' if len(merge_fields) > 5 else ''}")
         else:
             st.warning("No merge fields found in the template.")
-            # merge_fields = [] # Ensure it's an empty list not None for generate_prompt
         
         conga_fields = parse_conga_query(query_content, st.session_state['query_file_type'])
         if conga_fields:
-            st.success(f"Extracted {len(conga_fields)} fields from Conga query: {', '.join(conga_fields[:5])}{'...' if len(conga_fields) > 5 else ''}")
+             # Message now comes from within parse_conga_query or is a generic success
+             pass # St.success/warning is handled inside parse_conga_query for detailed CSV parsing
         else:
             st.warning("No fields extracted from the Conga query file.")
-            # conga_fields = []
 
         try:
             schema_data = json.loads(schema_content.decode('utf-8'))
@@ -357,43 +388,33 @@ if st.button("Generate Field Mapping"):
             st.success(f"Flattened schema into {len(flat_schema)} fields.")
         else:
             st.warning("Schema file was empty or could not be flattened.")
-            # flat_schema = {}
         
-        # context_file_ids is no longer strictly needed for the items array in call_box_ai
-        # but can be kept if you plan other uses or want to pass one ID.
-        # For now, call_box_ai will ignore its second argument's content for 'items'.
-        context_file_ids_for_logging_or_future_use = [
-            st.session_state.get('template_file_id'),
-            st.session_state.get('query_file_id'),
-            st.session_state.get('schema_file_id')
-        ]
-        context_file_ids_for_logging_or_future_use = [fid for fid in context_file_ids_for_logging_or_future_use if fid]
-
-        full_mapping_df = pd.DataFrame()
-        
-        if not merge_fields: # If no merge fields, no point in calling AI
+        if not merge_fields:
             st.error("Cannot generate mapping without merge fields from the template.")
             st.stop()
-        if not flat_schema: # If no schema, no point in calling AI
+        if not flat_schema:
              st.error("Cannot generate mapping without a valid, flattened schema.")
              st.stop()
 
+        schema_file_id_for_ai = st.session_state.get('schema_file_id')
+        if not schema_file_id_for_ai:
+            st.error("Schema file ID is missing. Cannot make Box AI call as it requires a grounding item.")
+            st.stop()
 
+        full_mapping_df = pd.DataFrame()
         schema_chunk_size = 30 
-        num_chunks = (len(flat_schema) + schema_chunk_size - 1) // schema_chunk_size
+        num_chunks = (len(flat_schema) + schema_chunk_size - 1) // schema_chunk_size if flat_schema else 1
         progress_bar = st.progress(0.0)
         processed_chunks = 0
 
         for i, schema_chunk in enumerate(chunk_dict(flat_schema, chunk_size=schema_chunk_size)):
             processed_chunks +=1
             st.info(f"Calling Box AI (part {processed_chunks} of {num_chunks} schema chunks)...")
-            # Update progress: current_chunk / total_chunks
             progress_bar.progress(processed_chunks / num_chunks, text=f"Processing schema chunk {processed_chunks}/{num_chunks}")
 
-            prompt_text = generate_prompt(merge_fields or [], conga_fields or [], schema_chunk) # Ensure lists are not None
+            prompt_text = generate_prompt(merge_fields or [], conga_fields or [], schema_chunk)
             
-            # Pass dummy/empty list for file_ids_ignored as it's not used for items array
-            ai_response_text = call_box_ai(prompt_text, [], st.secrets["box"]["BOX_DEVELOPER_TOKEN"])
+            ai_response_text = call_box_ai(prompt_text, schema_file_id_for_ai, st.secrets["box"]["BOX_DEVELOPER_TOKEN"])
             
             if ai_response_text:
                 mapping_df_chunk = convert_response_to_df(ai_response_text)
@@ -405,7 +426,7 @@ if st.button("Generate Field Mapping"):
         progress_bar.empty()
 
         if not full_mapping_df.empty:
-            full_mapping_df.drop_duplicates(subset=['CongaField', 'BoxField'], inplace=True) # Keep first unique
+            full_mapping_df.drop_duplicates(subset=['CongaField', 'BoxField'], inplace=True)
             
             st.subheader("Generated Field Mapping")
             st.dataframe(full_mapping_df)
@@ -425,5 +446,5 @@ if st.button("Generate Field Mapping"):
         st.error(f"An error occurred during processing: {str(e)}")
         import traceback
         st.text(traceback.format_exc())
-        if 'progress_bar' in locals() and progress_bar is not None: # Ensure progress bar is cleared on error
+        if 'progress_bar' in locals() and progress_bar is not None:
             progress_bar.empty()
