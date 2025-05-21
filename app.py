@@ -9,6 +9,19 @@ from boxsdk import OAuth2, Client
 
 st.set_page_config(page_title="Conga to Box Doc Gen", layout="centered")
 
+# --- AI Model Configuration ---
+# IMPORTANT: Replace placeholder model IDs with actual valid model IDs provided by Box
+# for the /ai/text_gen endpoint if you want to use specific models.
+# If a model ID is set to None or an empty string, the 'model' parameter will be omitted,
+# and Box will use its default text generation model.
+BOX_AI_MODELS = {
+    "Default (Let Box Choose)": None,
+    # Example: "box-claude-2.1-gen-001" (This is a hypothetical ID, get actual IDs from Box)
+    "Example Model A (e.g., Balanced)": "placeholder-model-id-a", 
+    "Example Model B (e.g., Creative/Powerful)": "placeholder-model-id-b",
+}
+# --- End AI Model Configuration ---
+
 # Box API configuration
 def get_box_client():
     client_id = st.secrets["box"]["BOX_CLIENT_ID"]
@@ -120,161 +133,160 @@ def extract_merge_fields(docx_content):
         
         cleaned_fields = set()
         for field in raw_fields:
-            core_field = re.split(r'\s*\\@|\s*\|', field, 1)[0] # Split by \@ or |
+            # Split by \@ or | or even & to remove common formatters/parameters
+            core_field = re.split(r'\s*(?:\\@|\||&)', field, 1)[0] 
             cleaned_fields.add(core_field.strip())
         
         if len(raw_fields) != len(cleaned_fields) or any(r != c for r, c in zip(sorted(list(raw_fields)), sorted(list(cleaned_fields)))):
             st.info(f"Cleaned merge fields. Original unique tags found: {len(raw_fields)}. Core fields for AI: {len(cleaned_fields)}")
-            # Example: st.caption(f"Example raw: '{list(raw_fields)[0]}', Cleaned: '{re.split(r'\\s*\\\\@|\\s*\\|', list(raw_fields)[0], 1)[0].strip()}'")
         return list(cleaned_fields)
 
+
 def parse_conga_query(file_content, file_type):
-    all_parsed_fields = set()
-    s_object_names = set()
+    sobject_to_fields_map = {}
+    all_unique_fields = set()
+    all_unique_sobjects = set()
 
-    def extract_from_soql_list(query_text_list):
-        processed_queries_count = 0
-        for query_text_item in query_text_list:
-            query_text_item = str(query_text_item).strip()
-            if not query_text_item: continue
+    def process_soql_string(query_text):
+        query_text = str(query_text).strip()
+        if not ("select " in query_text.lower() and " from " in query_text.lower()):
+            return False
+
+        from_match = re.search(r"from\s+([a-zA-Z0-9_]+(?:__c|__r)?)\b", query_text, re.IGNORECASE)
+        current_sobject = from_match.group(1) if from_match else None
+        
+        if current_sobject:
+            all_unique_sobjects.add(current_sobject)
+            if current_sobject not in sobject_to_fields_map:
+                sobject_to_fields_map[current_sobject] = set()
+
+        select_match = re.search(r"select\s+(.+?)\s+from", query_text, re.IGNORECASE | re.DOTALL)
+        if select_match:
+            fields_segment = select_match.group(1)
+            current_query_fields = re.findall(r"([\w\._()]+(?:\s+AS\s+[\w\._]+)?)(?:\s*,|\s+FROM)", fields_segment + " FROM", re.IGNORECASE | re.DOTALL)
             
-            from_match = re.search(r"from\s+([a-zA-Z0-9_]+(?:__c|__r)?)\b", query_text_item, re.IGNORECASE)
-            if from_match:
-                s_object_names.add(from_match.group(1))
+            cleaned_query_fields = {f.strip() for f in current_query_fields if f.strip()}
+            all_unique_fields.update(cleaned_query_fields)
+            if current_sobject:
+                sobject_to_fields_map[current_sobject].update(cleaned_query_fields)
+            return True
+        return False
 
-            if "select " in query_text_item.lower() and " from " in query_text_item.lower():
-                processed_queries_count +=1
-                select_match = re.search(r"select\s+(.+?)\s+from", query_text_item, re.IGNORECASE | re.DOTALL)
-                if select_match:
-                    fields_segment = select_match.group(1)
-                    current_query_fields = re.findall(r"([\w\._()]+(?:\s+AS\s+[\w\._]+)?)(?:\s*,|\s+FROM)", fields_segment + " FROM", re.IGNORECASE | re.DOTALL)
-                    all_parsed_fields.update([f.strip() for f in current_query_fields if f.strip()])
-        return processed_queries_count
-
+    queries_to_parse = []
     if file_type == 'csv':
         try:
-            df = pd.read_csv(io.BytesIO(file_content), header=None, skip_blank_lines=True)
-            queries_to_process = []
-            if not df.empty:
-                first_cell_value = str(df.iloc[0, 0]).lower().strip()
-                if "select " in first_cell_value and " from " in first_cell_value:
-                    queries_to_process = df.iloc[:, 0].dropna().astype(str).tolist()
-                elif len(df) > 1: 
-                    second_cell_value = str(df.iloc[1,0]).lower().strip()
-                    if "select " in second_cell_value and " from " in second_cell_value:
-                         queries_to_process = df.iloc[1:, 0].dropna().astype(str).tolist()
-                    else: 
-                        df_with_header = pd.read_csv(io.BytesIO(file_content))
-                        all_parsed_fields.update([str(col).strip() for col in df_with_header.columns])
-                        st.info(f"CSV: No SOQL found in first data column. Using headers as fields: {list(all_parsed_fields)}")
-                        return list(all_parsed_fields), list(s_object_names)
-                else: 
-                    if "select " in first_cell_value and " from " in first_cell_value:
-                        queries_to_process = df.iloc[:,0].dropna().astype(str).tolist()
-                    else: 
-                        df_with_header = pd.read_csv(io.BytesIO(file_content))
-                        all_parsed_fields.update([str(col).strip() for col in df_with_header.columns])
-                        st.info(f"CSV: Single row, no SOQL. Using headers as fields: {list(all_parsed_fields)}")
-                        return list(all_parsed_fields), list(s_object_names)
-
-                if queries_to_process:
-                    st.info(f"CSV: Found {len(queries_to_process)} potential queries in the first column.")
-                    num_processed = extract_from_soql_list(queries_to_process)
-                    if num_processed > 0 and (all_parsed_fields or s_object_names):
-                        st.success(f"CSV: Extracted {len(all_parsed_fields)} unique fields and {len(s_object_names)} SObjects from {num_processed} SOQL queries.")
-                    elif num_processed > 0 :
-                        st.warning(f"CSV: Processed {num_processed} SOQL queries but extracted no fields or SObjects.")
-                    else:
-                        st.warning("CSV: No processable SOQL queries found in the first column.")
-                else: # This case means the CSV was empty or didn't fit any query patterns
-                    st.warning("CSV: No queries to process from the first column after initial checks.")
-                    # Fallback to trying to use headers if any were read by default
-                    df_original_headers = pd.read_csv(io.BytesIO(file_content)) 
-                    if not df_original_headers.empty:
-                        all_parsed_fields.update([str(col).strip() for col in df_original_headers.columns])
-                        if all_parsed_fields:
-                             st.info(f"CSV: Fallback - Using column headers as fields: {list(all_parsed_fields)}")
-
+            df = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], squeeze=True, skip_blank_lines=True)
+            if isinstance(df, pd.Series):
+                queries_to_parse = df.dropna().astype(str).tolist()
+            elif isinstance(df, pd.DataFrame) and not df.empty:
+                 queries_to_parse = df.iloc[:,0].dropna().astype(str).tolist()
+            
+            if queries_to_parse:
+                 st.info(f"CSV: Processing {len(queries_to_parse)} lines from the first column as potential SOQL queries.")
+            else: # Fallback if squeeze didn't work or CSV not as expected
+                st.warning("CSV query file could not be parsed as a list of queries. Trying column headers as fallback.")
+                df_headers = pd.read_csv(io.BytesIO(file_content), nrows=0)
+                all_unique_fields.update([str(col).strip() for col in df_headers.columns])
+                st.info(f"CSV (Fallback): Using column headers as query fields: {list(all_unique_fields)}")
+                # For this fallback, we don't know the SObject, so map is less useful.
+                # We could put all fields under a generic key or leave sobject_to_fields_map empty.
+                if all_unique_fields:
+                    sobject_to_fields_map["UnknownFromCSVHeaders"] = set(all_unique_fields)
+                return list(all_unique_fields), list(all_unique_sobjects) # SObjects might be empty here
 
         except Exception as e:
-            st.error(f"Error parsing CSV query file: {e}. Trying to read as plain text SOQL.")
-            try:
-                text_content = file_content.decode("utf-8")
-                return parse_conga_query(text_content.encode("utf-8"), 'txt')
+            st.error(f"Error parsing CSV query file: {e}. Attempting fallback to TXT parsing.")
+            try: 
+                return parse_conga_query(file_content, 'txt')
             except Exception as e_txt:
-                st.error(f"Fallback to TXT parsing also failed: {e_txt}")
-                return [], []
+                 st.error(f"Fallback to TXT parsing also failed: {e_txt}")
+                 return {}, set(), set()
     
-    elif file_type == 'txt':  
-        text = file_content.decode("utf-8")
-        queries = re.split(r';\s*\n?|\n\s*(?=\n|\Z)|(?<=\n)\s*\n+(?=\S)', text) 
-        num_processed = extract_from_soql_list(queries)
-        if num_processed > 0 and (all_parsed_fields or s_object_names):
-             st.success(f"TXT: Extracted {len(all_parsed_fields)} unique fields and {len(s_object_names)} SObjects from {num_processed} SOQL queries.")
-        elif num_processed > 0:
-             st.warning(f"TXT: Processed {num_processed} SOQL queries but extracted no fields or SObjects.")
-        else:
-             st.warning("TXT: No SOQL queries found to process.")
-    
-    else: 
-         st.error(f"Unsupported query file type: {file_type}")
-
-    return list(all_parsed_fields), list(s_object_names)
-
-# Refined prompt strategy: Include SObjects and a *limited sample* of conga_query_fields
-def generate_prompt_single_call(merge_fields, conga_query_fields, conga_query_sobjects):
-    merge_fields_str = ", ".join(sorted(list(set(merge_fields))))
-    conga_sobjects_str = ", ".join(sorted(list(set(conga_query_sobjects)))) if conga_query_sobjects else "Not specified, infer from schema"
-    
-    max_query_fields_in_prompt = 50 # Adjust this limit as needed
-    unique_query_fields = sorted(list(set(conga_query_fields)))
-    
-    if len(unique_query_fields) > max_query_fields_in_prompt:
-        conga_fields_display_str = f"{', '.join(unique_query_fields[:max_query_fields_in_prompt])} (and {len(unique_query_fields) - max_query_fields_in_prompt} more, not listed here but present in the queries)"
+    elif file_type == 'txt':
+        text_content = file_content.decode("utf-8")
+        queries_to_parse = [q.strip() for q in re.split(r';\s*\n?|\n\s{2,}\n?|\n\s*$', text_content, flags=re.MULTILINE) if q.strip()]
+        if queries_to_parse: st.info(f"TXT: Found {len(queries_to_parse)} potential SOQL queries.")
     else:
-        conga_fields_display_str = ", ".join(unique_query_fields) if unique_query_fields else "No specific fields extracted from queries, rely on SObject list and schema file."
+        st.error(f"Unsupported query file type: {file_type}")
+        return {}, set(), set()
 
-    query_context_instruction = (
-        "The Conga queries, which were the original source for the Conga template fields, primarily involve the "
-        f"following Salesforce SObjects: {conga_sobjects_str}. "
-        "Additionally, some specific fields referenced in these queries include: "
-        f"{conga_fields_display_str}. "
-        "Use the provided schema file to find fields within these SObjects or related SObjects. "
-        "Prioritize mappings based on the SObject context and then the specific query fields if helpful.\n\n"
-    )
+    processed_count = 0
+    for query_str in queries_to_parse:
+        if process_soql_string(query_str):
+            processed_count += 1
+    
+    if processed_count > 0:
+        st.success(f"{file_type.upper()}: Processed {processed_count} SOQL queries. Found {len(all_unique_fields)} unique fields across {len(all_unique_sobjects)} SObjects.")
+    elif queries_to_parse: # If there were things to parse but none were processed
+        st.warning(f"{file_type.upper()}: No SOQL queries were successfully processed from {len(queries_to_parse)} candidates.")
+    else: # No queries found at all
+        st.warning(f"{file_type.upper()}: No query strings found to process.")
+
+
+    final_sobject_to_fields_map = {k: sorted(list(v)) for k, v in sobject_to_fields_map.items()}
+    return final_sobject_to_fields_map, all_unique_fields, all_unique_sobjects
+
+
+def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_sobjects):
+    merge_fields_str_list = []
+    for mf in sorted(list(set(merge_fields))):
+        mf_lower = mf.lower()
+        possible_sources = []
+        for sobj, fields in sobject_to_fields_map.items():
+            sobj_clean_name = sobj.lower().replace("__c", "").replace("__r", "")
+            if mf_lower.startswith(sobj_clean_name) or mf_lower.replace("_", "").startswith(sobj_clean_name):
+                if sobj not in [s.split(" ")[0] for s in possible_sources]:
+                    possible_sources.append(f"{sobj} (prefix match)")
+            else:
+                for q_field in fields:
+                    if mf_lower in q_field.lower() or q_field.lower() in mf_lower:
+                        if sobj not in [s.split(" ")[0] for s in possible_sources]:
+                             possible_sources.append(f"{sobj} (related: {q_field})")
+                        break 
+        hint = ""
+        if possible_sources:
+            hint = f" (Hint: check in SObject(s) - {'; '.join(possible_sources)[:150]})"
+        merge_fields_str_list.append(f"- {mf}{hint}")
+
+    detailed_merge_fields_list = "\n".join(merge_fields_str_list)
+    all_query_sobjects_str = ", ".join(sorted(list(all_query_sobjects))) if all_query_sobjects else "Not specified, use full schema"
 
     prompt = (
         "You are an AI assistant helping map fields from a Conga document generation system to a Box Doc Gen system. "
-        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API call). Please use this schema file extensively for your mappings.\n\n"
-        "Conga Template Merge Fields (these are the fields you need to map from the Conga template to the Salesforce schema):\n"
-        f"{merge_fields_str}\n\n"
-        f"{query_context_instruction}"
-        "Task: For each 'Conga Template Merge Field' listed above, find the most relevant field path from the provided Salesforce schema file. "
-        "Ensure the BoxField path is a valid path from the schema file.\n"
+        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API call). Use this schema file as the primary source of truth for Salesforce field paths.\n\n"
+        "Conga Template Merge Fields to Map (each with a hint about potential source SObjects based on associated Conga queries):\n"
+        f"{detailed_merge_fields_list}\n\n"
+        "The Conga queries (source of the above merge fields) primarily involve these Salesforce SObjects (consult the schema file for their detailed structure):\n"
+        f"{all_query_sobjects_str}\n\n"
+        "Task: For each 'Conga Template Merge Field' from the list above, find its most relevant corresponding field path in the provided Salesforce schema file. "
+        "Use the hints next to each merge field and the SObject list to guide your search within the schema. The hints are suggestions; the schema file is authoritative for field paths.\n"
         "Respond ONLY in CSV format with three columns: CongaField,BoxField,FieldType.\n"
-        "1. CongaField: The exact merge field name from the 'Conga Template Merge Fields' list.\n"
-        "2. BoxField: The corresponding full path from the Salesforce Schema file (e.g., Account.Name, $User.FirstName, Opportunity.LineItems.0.Product.Name). Refer to the provided schema file for these paths. If a CongaField seems to reference a related object not directly listed under the SObjects above, use the schema file to find the correct path (e.g. if CongaField is 'CONTACT_ACCOUNT_NAME' and main SObject is Contact, BoxField could be 'Contact.Account.Name').\n"
-        "3. FieldType: The data type of the BoxField if known from the schema file or inferable (e.g., Text, Number, Date, Boolean, RichText, Id, Picklist).\n"
-        "If a direct match for a CongaField is not clear in the schema, even after considering relationships, leave the BoxField and FieldType empty for that CongaField. Do not invent fields.\n"
-        "Prioritize exact or very close name matches within the relevant SObject contexts.\n"
-        "Example Row: CongaAmountField,Opportunity.Amount,Currency"
+        "1. CongaField: The exact Conga merge field from the list (without the hint part).\n"
+        "2. BoxField: The full path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode). Use the '$' prefix for global objects like $User or $Organization if present in the schema. Ensure this path exists in the provided schema.\n"
+        "3. FieldType: The data type of the BoxField from the schema (e.g., Text, Number, Date, Boolean, Picklist, Id, RichText, Lookup, MasterDetail).\n"
+        "If a match is not clear in the schema for a CongaField, even after considering relationships suggested by the hints or schema structure, leave the BoxField and FieldType empty for that CongaField. Do not invent field paths.\n"
+        "Prioritize exact or very close name matches within the relevant SObject contexts identified by the hints.\n"
+        "Example Row: Template_Account_Name,Account.Name,Text"
     )
     return prompt
 
-def call_box_ai(prompt, grounding_file_id, developer_token):
+def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
     url = "https://api.box.com/2.0/ai/text_gen"
     headers = {"Authorization": f"Bearer {developer_token}", "Content-Type": "application/json"}
     items_payload = []
     if grounding_file_id:
         items_payload.append({"type": "file", "id": str(grounding_file_id), "content_type": "text_content"})
-    else: 
-        st.error("CRITICAL: grounding_file_id missing for call_box_ai. API may fail.")
     
     data = {"prompt": prompt, "items": items_payload}
+    model_used_message = "Using default Box AI model."
+    if model_id and model_id != "None": # Check against string "None" if it might come from selectbox
+        data["model"] = model_id
+        model_used_message = f"Using Box AI model: {model_id}"
     
+    st.info(model_used_message)
     st.info("Box AI Request Payload (see console/logs for full details):")
     st.json(data) 
-    print(f"--- Sending Box AI Request ---\nURL: {url}\nHeaders: {json.dumps(headers, indent=2)}\nPayload Length: {len(json.dumps(data))}\n-----------------------------")
+    print(f"--- Sending Box AI Request ---\nURL: {url}\nHeaders: {json.dumps(headers, indent=2)}\nModel: {data.get('model', 'Default')}\nPayload Length: {len(json.dumps(data))}\n-----------------------------")
     
     response = requests.post(url, headers=headers, json=data)
     
@@ -287,17 +299,13 @@ def call_box_ai(prompt, grounding_file_id, developer_token):
             response_text_for_return = response_data.get("answer", "") 
     except json.JSONDecodeError: 
         print(f"Response Body (Non-JSON): {response.text[:500]}...")
-        if response.status_code == 200: 
-            response_text_for_return = response.text 
+        if response.status_code == 200: response_text_for_return = response.text 
     except Exception as e: 
         print(f"Could not process Box AI response for logging: {e}\nRaw (first 500 chars): {response.text[:500]}...")
     print("-----------------------------")
 
-    if response.status_code == 200: 
-        return response_text_for_return
-    else: 
-        st.error(f"Box AI request failed: {response.status_code} — {response.text}")
-        return None
+    if response.status_code == 200: return response_text_for_return
+    else: st.error(f"Box AI request failed: {response.status_code} — {response.text}"); return None
 
 def convert_response_to_df(text):
     if not text or not isinstance(text, str):
@@ -317,7 +325,7 @@ def convert_response_to_df(text):
     header_idx = -1
     expected_headers_check = ["CongaField", "BoxField"] 
     for i, line in enumerate(lines):
-        if all(expected_header in line for expected_header in expected_headers_check):
+        if all(expected_header.lower() in line.lower() for expected_header in expected_headers_check): # case-insensitive check
             header_idx = i
             break
     
@@ -329,19 +337,6 @@ def convert_response_to_df(text):
         return pd.DataFrame(columns=final_columns)
 
     header_from_ai_raw = [h.strip() for h in lines[header_idx].split(",")]
-    # Map AI headers to our expected final_columns, being flexible with AI's column naming
-    header_map = {}
-    temp_final_cols_lower = [fc.lower() for fc in final_columns]
-    
-    for ai_h in header_from_ai_raw:
-        ai_h_lower = ai_h.lower()
-        if ai_h_lower in temp_final_cols_lower:
-            original_col_name = final_columns[temp_final_cols_lower.index(ai_h_lower)]
-            header_map[ai_h] = original_col_name
-    
-    # If AI didn't provide expected headers, this will be empty or partial.
-    # We will construct DataFrame with final_columns and fill data based on mapped AI headers.
-
     data_lines = lines[header_idx+1:]
     processed_data_list = []
 
@@ -358,24 +353,34 @@ def convert_response_to_df(text):
 
         split_line_values = [val.strip() for val in line_content_stripped.split(",")]
         
-        # Create a dictionary for the current row based on AI's headers
-        row_dict_from_ai = {}
-        for i, val in enumerate(split_line_values):
-            if i < len(header_from_ai_raw): # Ensure we don't go out of bounds for AI's header
-                ai_header_name = header_from_ai_raw[i]
-                if ai_header_name in header_map: # If this AI header maps to one of our final_columns
-                    row_dict_from_ai[header_map[ai_header_name]] = val
-                # else: # AI provided a column we are not expecting, ignore for now
-                #    pass
-            # Handle cases where FieldType might have commas
-            elif header_map.get(header_from_ai_raw[-1]) == "FieldType" and len(header_from_ai_raw) > 0: 
-                # If the last mapped AI header is FieldType, append to it
-                 row_dict_from_ai["FieldType"] += "," + val
+        row_data = {}
+        # Try to map based on expected column names, being flexible with AI's header naming
+        for i, col_name_expected in enumerate(final_columns):
+            found_val = None
+            for j, ai_header in enumerate(header_from_ai_raw):
+                if ai_header.lower() == col_name_expected.lower():
+                    if j < len(split_line_values):
+                        found_val = split_line_values[j]
+                    # If it's the last expected column and there are more split values, join them
+                    if col_name_expected == final_columns[-1] and j < len(split_line_values) and len(split_line_values) > len(header_from_ai_raw):
+                         found_val = ",".join(split_line_values[j:])
+                    break 
+            row_data[col_name_expected] = found_val if found_val is not None else ""
 
 
-        # Ensure all final_columns are present in the dict for DataFrame consistency
-        final_row_dict = {col: row_dict_from_ai.get(col, "") for col in final_columns}
-        processed_data_list.append(final_row_dict)
+        # Fallback if above mapping is insufficient (e.g. AI gives fewer columns than expected)
+        if not any(row_data.values()): # If all values are empty from mapping
+            if len(split_line_values) == 1:
+                row_data["CongaField"] = split_line_values[0]
+            elif len(split_line_values) == 2:
+                row_data["CongaField"] = split_line_values[0]
+                row_data["BoxField"] = split_line_values[1]
+            elif len(split_line_values) >= 3:
+                row_data["CongaField"] = split_line_values[0]
+                row_data["BoxField"] = split_line_values[1]
+                row_data["FieldType"] = ",".join(split_line_values[2:]) # Join if FieldType had commas
+        
+        processed_data_list.append(row_data)
             
     if not processed_data_list:
         st.warning("No valid data rows extracted from AI response.")
@@ -388,6 +393,20 @@ def convert_response_to_df(text):
 
 if 'current_folder' not in st.session_state: st.session_state['current_folder'] = "0"
 st.title("Conga Template to Box Doc Gen Mapper")
+
+# --- UI for Model Selection ---
+st.sidebar.subheader("AI Configuration")
+# Ensure BOX_AI_MODELS is defined globally or passed appropriately
+model_display_names = list(BOX_AI_MODELS.keys())
+selected_model_display_name = st.sidebar.selectbox(
+    "Choose Box AI Model:",
+    options=model_display_names,
+    index=0 # Default to the first model in the list
+)
+selected_model_id = BOX_AI_MODELS[selected_model_display_name]
+# --- End UI for Model Selection ---
+
+
 with st.sidebar:
     st.header("Box File Browser")
     try:
@@ -417,7 +436,7 @@ if st.button("Generate Field Mapping"):
         else: st.warning("No merge fields found.")
         
         progress_bar_main.progress(0.3, text="Parsing Conga query...")
-        conga_fields, conga_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
+        sobject_to_fields_map, _, all_query_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
         
         progress_bar_main.progress(0.4, text="Validating schema file ID...")
         schema_file_id_for_ai = st.session_state.get('schema_file_id')
@@ -428,9 +447,9 @@ if st.button("Generate Field Mapping"):
 
         full_mapping_df = pd.DataFrame()
         
-        progress_bar_main.progress(0.5, text="Calling Box AI (single call with full schema context)...")
-        prompt_text = generate_prompt_single_call(merge_fields or [], conga_fields or [], conga_sobjects or [])
-        ai_response_text = call_box_ai(prompt_text, schema_file_id_for_ai, st.secrets["box"]["BOX_DEVELOPER_TOKEN"])
+        progress_bar_main.progress(0.5, text="Calling Box AI...")
+        prompt_text = generate_prompt_single_call(merge_fields or [], sobject_to_fields_map, all_query_sobjects or [])
+        ai_response_text = call_box_ai(prompt_text, schema_file_id_for_ai, st.secrets["box"]["BOX_DEVELOPER_TOKEN"], selected_model_id)
         
         progress_bar_main.progress(0.8, text="Processing AI response...")
         if ai_response_text:
@@ -445,11 +464,10 @@ if st.button("Generate Field Mapping"):
 
         if not full_mapping_df.empty:
             expected_cols = ["CongaField", "BoxField", "FieldType"]
-            # Ensure all expected columns are present, add if missing
             for col in expected_cols:
                 if col not in full_mapping_df.columns:
                     full_mapping_df[col] = "" 
-            full_mapping_df = full_mapping_df[expected_cols] # Reorder/select
+            full_mapping_df = full_mapping_df[expected_cols] 
 
             full_mapping_df.drop_duplicates(subset=['CongaField', 'BoxField'], inplace=True, keep='first')
             st.subheader("Generated Field Mapping")
