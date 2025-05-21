@@ -43,7 +43,7 @@ ALLOWED_MODEL_IDS = [
     "ibm__llama_3_2_90b_vision_instruct", "ibm__llama_4_scout"
 ]
 BOX_AI_MODELS_FOR_SELECTBOX = {"Default (Let Box Choose)": None}
-for model_id_val in ALLOWED_MODEL_IDS: # Renamed model_id to model_id_val to avoid conflict
+for model_id_val in ALLOWED_MODEL_IDS:
     description = ALL_MODELS_WITH_DESC.get(model_id_val, "No description available")
     display_name = f"{model_id_val} ({description.split(':')[0]})" 
     BOX_AI_MODELS_FOR_SELECTBOX[display_name] = model_id_val
@@ -102,12 +102,12 @@ def navigate_folders(client, current_folder_id):
     breadcrumb_cols = st.columns(len(path_parts) + 1) 
     if breadcrumb_cols[0].button("Root", key="nav_root_button"):
         st.session_state.current_folder = "0"
-        st.rerun() # CHANGED
+        st.rerun()
 
     for i, part in enumerate(path_parts):
         if breadcrumb_cols[i+1].button(part["name"], key=f"nav_breadcrumb_{part['id']}"):
             st.session_state.current_folder = part["id"]
-            st.rerun() # CHANGED
+            st.rerun()
             
     st.subheader(f"Folder: {folder.name}")
     header_cols = st.columns([0.55, 0.15, 0.15, 0.15]) 
@@ -124,7 +124,7 @@ def navigate_folders(client, current_folder_id):
         if item.type == "folder":
             if item_cols[3].button("Open", key=f"open_folder_{item.id}", help=f"Open folder {item.name}"):
                  st.session_state.current_folder = item.id
-                 st.rerun() # CHANGED
+                 st.rerun()
         else: 
             file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
             
@@ -133,30 +133,32 @@ def navigate_folders(client, current_folder_id):
             selected_as_schema = st.session_state.get('schema_file_id') == item.id
 
             checkbox_changed = False
+            cb_key_suffix = item.id # Unique part of the key
+
             if file_extension == 'docx':
-                new_val_template = item_cols[2].checkbox("T", key=f"cb_template_{item.id}", value=selected_as_template, help="Select as Template")
-                if new_val_template and not selected_as_template: # Was False, now True
-                    st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name
+                new_val_template = item_cols[2].checkbox("T", key=f"cb_template_{cb_key_suffix}", value=selected_as_template, help="Select as Template")
+                if new_val_template != selected_as_template:
+                    if new_val_template:
+                        st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name
+                    else:
+                        st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None)
                     checkbox_changed = True
-                elif not new_val_template and selected_as_template: # Was True, now False (deselected)
-                     st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None)
-                     checkbox_changed = True
             elif file_extension in ['txt', 'csv']:
-                new_val_query = item_cols[2].checkbox("Q", key=f"cb_query_{item.id}", value=selected_as_query, help="Select as Query File")
-                if new_val_query and not selected_as_query:
-                    st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
+                new_val_query = item_cols[2].checkbox("Q", key=f"cb_query_{cb_key_suffix}", value=selected_as_query, help="Select as Query File")
+                if new_val_query != selected_as_query:
+                    if new_val_query:
+                        st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
+                    else:
+                        st.session_state.pop('query_file_id', None); st.session_state.pop('query_file_name', None); st.session_state.pop('query_file_type', None)
                     checkbox_changed = True
-                elif not new_val_query and selected_as_query:
-                     st.session_state.pop('query_file_id', None); st.session_state.pop('query_file_name', None); st.session_state.pop('query_file_type', None)
-                     checkbox_changed = True
             elif file_extension == 'json':
-                new_val_schema = item_cols[2].checkbox("S", key=f"cb_schema_{item.id}", value=selected_as_schema, help="Select as Schema File")
-                if new_val_schema and not selected_as_schema:
-                    st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name
+                new_val_schema = item_cols[2].checkbox("S", key=f"cb_schema_{cb_key_suffix}", value=selected_as_schema, help="Select as Schema File")
+                if new_val_schema != selected_as_schema:
+                    if new_val_schema:
+                        st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name
+                    else:
+                        st.session_state.pop('schema_file_id', None); st.session_state.pop('schema_file_name', None)
                     checkbox_changed = True
-                elif not new_val_schema and selected_as_schema:
-                     st.session_state.pop('schema_file_id', None); st.session_state.pop('schema_file_name', None)
-                     checkbox_changed = True
             
             if checkbox_changed:
                 st.rerun()
@@ -179,7 +181,9 @@ def extract_merge_fields(docx_content):
                     for para_in_cell in cell.paragraphs:
                         matches = re.findall(pattern, para_in_cell.text)
                         for match_text in matches: raw_fields.add(match_text.strip())
-        cleaned_fields = {re.split(r'\s*(?:\\@|\||&)', f, 1)[0].strip() for f in raw_fields}
+        
+        cleaned_fields = {re.split(r'\s*(?:\\@|\||&)', f, maxsplit=1)[0].strip() for f in raw_fields} # FIXED: maxsplit keyword
+        
         if len(raw_fields) != len(cleaned_fields) or any(r != c for r, c in zip(sorted(list(raw_fields)), sorted(list(cleaned_fields)))):
             st.info(f"Cleaned merge fields. Original: {len(raw_fields)}. Core: {len(cleaned_fields)}")
         return list(cleaned_fields)
@@ -210,23 +214,31 @@ def parse_conga_query(file_content, file_type):
                     current_query_fields_list = re.findall(r"([\w\._()]+(?:\s+AS\s+[\w\._]+)?)(?:\s*,|\s+FROM)", fields_segment + " FROM", re.IGNORECASE | re.DOTALL)
                     cleaned_query_fields_set = {f.strip() for f in current_query_fields_list if f.strip()}
                     all_unique_fields.update(cleaned_query_fields_set)
-                    if current_sobject_from_query: # Check before using
+                    if current_sobject_from_query: 
                         sobject_to_fields_map[current_sobject_from_query].update(cleaned_query_fields_set)
         return processed_queries_count
 
     queries_to_parse = []
     if file_type == 'csv':
         try:
-            df = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], squeeze=True, skip_blank_lines=True)
-            if isinstance(df, pd.Series): queries_to_parse = df.dropna().astype(str).tolist()
-            elif isinstance(df, pd.DataFrame) and not df.empty: queries_to_parse = df.iloc[:,0].dropna().astype(str).tolist()
+            # Remove squeeze=True
+            df_read = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], skip_blank_lines=True)
+            if isinstance(df_read, pd.DataFrame): # If usecols returns a DataFrame (e.g. empty file or strange structure)
+                df_series = df_read.iloc[:, 0] if not df_read.empty else pd.Series(dtype=str)
+            else: # It's already a Series
+                df_series = df_read
+            
+            if not df_series.empty:
+                queries_to_parse = df_series.dropna().astype(str).tolist()
             
             if queries_to_parse: st.info(f"CSV: Processing {len(queries_to_parse)} lines from first column as SOQL.")
             else:
-                st.warning("CSV: No queries in first column. Using headers as fields.")
+                st.warning("CSV: No queries in first column after parsing. Using headers as fields if available.")
                 df_headers = pd.read_csv(io.BytesIO(file_content), nrows=0) 
                 all_unique_fields.update([str(col).strip() for col in df_headers.columns])
-                if all_unique_fields: sobject_to_fields_map["UnknownFromCSVHeaders"] = set(all_unique_fields)
+                if all_unique_fields: 
+                    sobject_to_fields_map["UnknownFromCSVHeaders"] = set(all_unique_fields)
+                    st.info(f"CSV (Fallback): Using column headers as query fields: {list(all_unique_fields)}")
                 return {k: sorted(list(v)) for k,v in sobject_to_fields_map.items()}, all_unique_fields, all_unique_sobjects
         except Exception as e:
             st.error(f"Error parsing CSV: {e}. Trying as TXT."); return parse_conga_query(file_content, 'txt')
@@ -287,12 +299,12 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
     data = {"prompt": prompt, "items": items_payload}
     model_used_msg = "Using default Box AI model."
     if model_id: data["model"] = model_id; model_used_msg = f"Using Box AI model: {model_id}"
-    st.info(model_used_msg); st.info("Box AI Request Payload (see console for full details if large):"); 
-    # Truncate displayed JSON if too long to avoid overwhelming UI
+    st.info(model_used_msg); 
+    
     displayed_data = data.copy()
-    if len(json.dumps(displayed_data.get("prompt", ""))) > 1000: # If prompt is long
-        displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display)"
-    st.json(displayed_data) 
+    if len(json.dumps(displayed_data.get("prompt", ""))) > 1000:
+        displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display for brevity)"
+    st.info("Box AI Request Payload (see console for full details if large):"); st.json(displayed_data) 
 
     print(f"--- Sending Box AI Request ---\nURL: {url}\nModel: {data.get('model', 'Default')}\nPayload Len: {len(json.dumps(data))}\n-----------------------------")
     response = requests.post(url, headers=headers, json=data)
@@ -340,7 +352,7 @@ def convert_response_to_df(text):
                     else: row_data[expected_col_name] = split_vals[ai_col_idx]
                     mapped_successfully_by_header_name = True 
             except ValueError: pass
-        if not mapped_successfully_by_header_name or not row_data["CongaField"]: # Prioritize CongaField from positional if header mapping failed for it
+        if not mapped_successfully_by_header_name or not row_data["CongaField"]:
             if len(split_vals) >= 1: row_data["CongaField"] = split_vals[0]
             if len(split_vals) >= 2: row_data["BoxField"] = split_vals[1]
             if len(split_vals) >= 3: row_data["FieldType"] = ",".join(split_vals[2:])
@@ -414,4 +426,4 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
         else: st.warning("No valid field mappings generated by Box AI.")
     except Exception as e:
         st.error(f"An error occurred during processing: {str(e)}"); import traceback; st.text(traceback.format_exc())
-        if 'prog_bar' in locals(): prog_bar.empty()
+        if 'prog_bar' in locals() and prog_bar is not None : prog_bar.empty() # Ensure progress bar is cleared
