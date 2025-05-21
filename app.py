@@ -17,7 +17,7 @@ ALL_MODELS_WITH_DESC = {
     "azure__openai__gpt_4o_mini": "Azure OpenAI GPT-4o Mini: Lightweight multimodal model",
     "azure__openai__gpt_4o": "Azure OpenAI GPT-4o: Highly efficient multimodal model for complex tasks",
     "azure__openai__gpt_4_1": "Azure OpenAI GPT-4.1: Highly efficient multimodal model for complex tasks",
-    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks",
+    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks", 
     "azure__openai__gpt_o4-mini": "Azure OpenAI GPT o4-mini: Highly efficient multimodal model for complex tasks",
     "google__gemini_2_5_pro_preview": "Google Gemini 2.5 Pro: Optimal for high-volume, high-frequency tasks (Preview)",
     "google__gemini_2_5_flash_preview": "Google Gemini 2.5 Flash: Optimal for high-volume, high-frequency tasks (Preview)",
@@ -43,10 +43,10 @@ ALLOWED_MODEL_IDS = [
     "ibm__llama_3_2_90b_vision_instruct", "ibm__llama_4_scout"
 ]
 BOX_AI_MODELS_FOR_SELECTBOX = {"Default (Let Box Choose)": None}
-for model_id in ALLOWED_MODEL_IDS:
-    description = ALL_MODELS_WITH_DESC.get(model_id, "No description available")
-    display_name = f"{model_id} ({description.split(':')[0]})" # Shorter description for selectbox
-    BOX_AI_MODELS_FOR_SELECTBOX[display_name] = model_id
+for model_id_val in ALLOWED_MODEL_IDS: # Renamed model_id to model_id_val to avoid conflict
+    description = ALL_MODELS_WITH_DESC.get(model_id_val, "No description available")
+    display_name = f"{model_id_val} ({description.split(':')[0]})" 
+    BOX_AI_MODELS_FOR_SELECTBOX[display_name] = model_id_val
 # --- End AI Model Configuration ---
 
 # --- Function Definitions ---
@@ -85,8 +85,11 @@ def navigate_folders(client, current_folder_id):
     path_parts = []
     ancestor_tracer = folder
     while True:
-        if not hasattr(ancestor_tracer, 'parent') or not ancestor_tracer.parent or ancestor_tracer.parent.id == "0":
+        if not hasattr(ancestor_tracer, 'parent') or \
+           not ancestor_tracer.parent or \
+           ancestor_tracer.parent.id == "0":
             break 
+        
         parent_ref = ancestor_tracer.parent
         try:
             parent_full_obj = client.folder(parent_ref.id).get(fields=["name", "parent"])
@@ -99,50 +102,65 @@ def navigate_folders(client, current_folder_id):
     breadcrumb_cols = st.columns(len(path_parts) + 1) 
     if breadcrumb_cols[0].button("Root", key="nav_root_button"):
         st.session_state.current_folder = "0"
-        st.experimental_rerun()
+        st.rerun() # CHANGED
 
     for i, part in enumerate(path_parts):
         if breadcrumb_cols[i+1].button(part["name"], key=f"nav_breadcrumb_{part['id']}"):
             st.session_state.current_folder = part["id"]
-            st.experimental_rerun()
+            st.rerun() # CHANGED
             
     st.subheader(f"Folder: {folder.name}")
-    header_cols = st.columns([0.6, 0.2, 0.1, 0.1]) # Adjusted for button text
+    header_cols = st.columns([0.55, 0.15, 0.15, 0.15]) 
     header_cols[0].write("Name")
     header_cols[1].write("Type")
-    header_cols[2].write("Select") # Column for checkboxes/buttons
-    # header_cols[3].write("Action") # Column for open button
+    header_cols[2].write("Select") 
+    header_cols[3].write("Action")
 
     for item in items:
-        item_cols = st.columns([0.6, 0.2, 0.1, 0.1])
+        item_cols = st.columns([0.55, 0.15, 0.15, 0.15])
         item_cols[0].write(f"{'📁' if item.type == 'folder' else '📄'} {item.name}")
         item_cols[1].write(item.type.capitalize())
         
         if item.type == "folder":
-            if item_cols[3].button("Open", key=f"open_folder_{item.id}"):
+            if item_cols[3].button("Open", key=f"open_folder_{item.id}", help=f"Open folder {item.name}"):
                  st.session_state.current_folder = item.id
-                 st.experimental_rerun()
-        else:
+                 st.rerun() # CHANGED
+        else: 
             file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
-            is_selected_template = st.session_state.get('template_file_id') == item.id
-            is_selected_query = st.session_state.get('query_file_id') == item.id
-            is_selected_schema = st.session_state.get('schema_file_id') == item.id
+            
+            selected_as_template = st.session_state.get('template_file_id') == item.id
+            selected_as_query = st.session_state.get('query_file_id') == item.id
+            selected_as_schema = st.session_state.get('schema_file_id') == item.id
 
+            checkbox_changed = False
             if file_extension == 'docx':
-                if item_cols[2].checkbox("T", key=f"select_template_{item.id}", value=is_selected_template, help="Select as Template"):
+                new_val_template = item_cols[2].checkbox("T", key=f"cb_template_{item.id}", value=selected_as_template, help="Select as Template")
+                if new_val_template and not selected_as_template: # Was False, now True
                     st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name
-                elif is_selected_template: # If deselected
+                    checkbox_changed = True
+                elif not new_val_template and selected_as_template: # Was True, now False (deselected)
                      st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None)
+                     checkbox_changed = True
             elif file_extension in ['txt', 'csv']:
-                if item_cols[2].checkbox("Q", key=f"select_query_{item.id}", value=is_selected_query, help="Select as Query File"):
+                new_val_query = item_cols[2].checkbox("Q", key=f"cb_query_{item.id}", value=selected_as_query, help="Select as Query File")
+                if new_val_query and not selected_as_query:
                     st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
-                elif is_selected_query:
+                    checkbox_changed = True
+                elif not new_val_query and selected_as_query:
                      st.session_state.pop('query_file_id', None); st.session_state.pop('query_file_name', None); st.session_state.pop('query_file_type', None)
+                     checkbox_changed = True
             elif file_extension == 'json':
-                if item_cols[2].checkbox("S", key=f"select_schema_{item.id}", value=is_selected_schema, help="Select as Schema File"):
+                new_val_schema = item_cols[2].checkbox("S", key=f"cb_schema_{item.id}", value=selected_as_schema, help="Select as Schema File")
+                if new_val_schema and not selected_as_schema:
                     st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name
-                elif is_selected_schema:
+                    checkbox_changed = True
+                elif not new_val_schema and selected_as_schema:
                      st.session_state.pop('schema_file_id', None); st.session_state.pop('schema_file_name', None)
+                     checkbox_changed = True
+            
+            if checkbox_changed:
+                st.rerun()
+
 
 def download_box_file(client, file_id):
     return client.file(file_id).content()
@@ -176,11 +194,14 @@ def parse_conga_query(file_content, file_type):
         for query_text_item in query_text_list:
             query_text_item = str(query_text_item).strip()
             if not query_text_item: continue
+            
             from_match = re.search(r"from\s+([a-zA-Z0-9_]+(?:__c|__r)?)\b", query_text_item, re.IGNORECASE)
             current_sobject_from_query = from_match.group(1) if from_match else None
+            
             if current_sobject_from_query:
                 all_unique_sobjects.add(current_sobject_from_query)
                 sobject_to_fields_map.setdefault(current_sobject_from_query, set())
+
             if "select " in query_text_item.lower() and " from " in query_text_item.lower():
                 processed_queries_count +=1
                 select_match = re.search(r"select\s+(.+?)\s+from", query_text_item, re.IGNORECASE | re.DOTALL)
@@ -189,7 +210,7 @@ def parse_conga_query(file_content, file_type):
                     current_query_fields_list = re.findall(r"([\w\._()]+(?:\s+AS\s+[\w\._]+)?)(?:\s*,|\s+FROM)", fields_segment + " FROM", re.IGNORECASE | re.DOTALL)
                     cleaned_query_fields_set = {f.strip() for f in current_query_fields_list if f.strip()}
                     all_unique_fields.update(cleaned_query_fields_set)
-                    if current_sobject_from_query:
+                    if current_sobject_from_query: # Check before using
                         sobject_to_fields_map[current_sobject_from_query].update(cleaned_query_fields_set)
         return processed_queries_count
 
@@ -199,6 +220,7 @@ def parse_conga_query(file_content, file_type):
             df = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], squeeze=True, skip_blank_lines=True)
             if isinstance(df, pd.Series): queries_to_parse = df.dropna().astype(str).tolist()
             elif isinstance(df, pd.DataFrame) and not df.empty: queries_to_parse = df.iloc[:,0].dropna().astype(str).tolist()
+            
             if queries_to_parse: st.info(f"CSV: Processing {len(queries_to_parse)} lines from first column as SOQL.")
             else:
                 st.warning("CSV: No queries in first column. Using headers as fields.")
@@ -265,7 +287,13 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
     data = {"prompt": prompt, "items": items_payload}
     model_used_msg = "Using default Box AI model."
     if model_id: data["model"] = model_id; model_used_msg = f"Using Box AI model: {model_id}"
-    st.info(model_used_msg); st.info("Box AI Request Payload (see console for full details if large):"); st.json(data) 
+    st.info(model_used_msg); st.info("Box AI Request Payload (see console for full details if large):"); 
+    # Truncate displayed JSON if too long to avoid overwhelming UI
+    displayed_data = data.copy()
+    if len(json.dumps(displayed_data.get("prompt", ""))) > 1000: # If prompt is long
+        displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display)"
+    st.json(displayed_data) 
+
     print(f"--- Sending Box AI Request ---\nURL: {url}\nModel: {data.get('model', 'Default')}\nPayload Len: {len(json.dumps(data))}\n-----------------------------")
     response = requests.post(url, headers=headers, json=data)
     print(f"--- Received Box AI Response (Status: {response.status_code}) ---")
@@ -286,14 +314,14 @@ def convert_response_to_df(text):
     if csv_match: st.info("Extracted CSV block from AI response.")
     else: st.info("No CSV markdown block found, parsing response as is.")
     lines = csv_text.strip().splitlines()
-    header_idx = -1; expected_hdrs = ["CongaField", "BoxField"]
+    header_idx = -1; expected_hdrs_check = ["CongaField", "BoxField"]
     for i, line in enumerate(lines):
-        if all(eh.lower() in line.lower() for eh in expected_hdrs): header_idx = i; break
+        if all(eh.lower() in line.lower() for eh in expected_hdrs_check): header_idx = i; break
     final_cols = ["CongaField", "BoxField", "FieldType"]
     if header_idx == -1:
         st.warning(f"CSV header (CongaField, BoxField) not found."); st.text_area("Processed AI Text", csv_text, height=100)
         return pd.DataFrame(columns=final_cols)
-    header_from_ai = [h.strip() for h in lines[header_idx].split(",")]
+    header_from_ai_raw = [h.strip() for h in lines[header_idx].split(",")]
     data_list = []
     for line_num, line_content in enumerate(lines[header_idx+1:]):
         line_content_s = line_content.strip()
@@ -301,19 +329,21 @@ def convert_response_to_df(text):
             if line_content_s: st.info(f"Skipping non-data line: '{line_content_s}'"); continue
         split_vals = [v.strip() for v in line_content_s.split(",")]
         row_data = {col: "" for col in final_cols}
-        # Map based on header_from_ai if possible, else positional
-        for i, exp_col in enumerate(final_cols):
-            # Try to find exp_col in header_from_ai (case insensitive)
-            ai_col_idx = next((j for j, ai_h in enumerate(header_from_ai) if ai_h.lower() == exp_col.lower()), -1)
-            if ai_col_idx != -1 and ai_col_idx < len(split_vals):
-                row_data[exp_col] = split_vals[ai_col_idx]
-                # If last col and more splits, join them for that col
-                if exp_col == final_cols[-1] and len(split_vals) > len(header_from_ai):
-                     row_data[exp_col] = ",".join(split_vals[ai_col_idx:])
-            elif i < len(split_vals): # Positional fallback
-                if i == 0: row_data["CongaField"] = split_vals[i]
-                elif i == 1: row_data["BoxField"] = split_vals[i]
-                elif i == 2: row_data["FieldType"] = ",".join(split_vals[i:]) # Join rest for FieldType
+        mapped_successfully_by_header_name = False
+        temp_ai_headers_lower = [h.lower() for h in header_from_ai_raw]
+        for i_expected, expected_col_name in enumerate(final_cols):
+            try:
+                ai_col_idx = temp_ai_headers_lower.index(expected_col_name.lower())
+                if ai_col_idx < len(split_vals):
+                    if expected_col_name == final_cols[-1] and ai_col_idx < len(split_vals) and len(split_vals) > len(header_from_ai_raw):
+                        row_data[expected_col_name] = ",".join(split_vals[ai_col_idx:])
+                    else: row_data[expected_col_name] = split_vals[ai_col_idx]
+                    mapped_successfully_by_header_name = True 
+            except ValueError: pass
+        if not mapped_successfully_by_header_name or not row_data["CongaField"]: # Prioritize CongaField from positional if header mapping failed for it
+            if len(split_vals) >= 1: row_data["CongaField"] = split_vals[0]
+            if len(split_vals) >= 2: row_data["BoxField"] = split_vals[1]
+            if len(split_vals) >= 3: row_data["FieldType"] = ",".join(split_vals[2:])
         if row_data["CongaField"]: data_list.append(row_data)
         elif any(row_data.values()): st.info(f"Skipping row with empty CongaField: {row_data}")
     if not data_list: st.warning("No valid data rows extracted."); return pd.DataFrame(columns=final_cols)
@@ -383,5 +413,5 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
             st.download_button("Download Mapping CSV", csv_buf.getvalue(), "field_mapping.csv", "text/csv")
         else: st.warning("No valid field mappings generated by Box AI.")
     except Exception as e:
-        st.error(f"Processing error: {str(e)}"); import traceback; st.text(traceback.format_exc())
+        st.error(f"An error occurred during processing: {str(e)}"); import traceback; st.text(traceback.format_exc())
         if 'prog_bar' in locals(): prog_bar.empty()
