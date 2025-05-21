@@ -12,9 +12,9 @@ st.set_page_config(page_title="Conga to Box Doc Gen", layout="centered")
 
 # Box API configuration
 def get_box_client():
-    client_id = st.secrets["BOX_CLIENT_ID"]
-    client_secret = st.secrets["BOX_CLIENT_SECRET"]
-    developer_token = st.secrets["BOX_DEVELOPER_TOKEN"]
+    client_id = st.secrets["box"]["BOX_CLIENT_ID"]
+    client_secret = st.secrets["box"]["BOX_CLIENT_SECRET"]
+    developer_token = st.secrets["box"]["BOX_DEVELOPER_TOKEN"]
     
     oauth = OAuth2(
         client_id=client_id,
@@ -253,7 +253,7 @@ if st.button("Generate Field Mapping"):
         full_mapping_df = pd.DataFrame()
         for chunk in chunk_dict(flat_schema, chunk_size=50):
             prompt = generate_prompt(merge_fields, conga_fields, chunk)
-            ai_text = call_box_ai(prompt, file_ids, st.secrets["BOX_DEVELOPER_TOKEN"])
+            ai_text = call_box_ai(prompt, file_ids, st.secrets["box"]["BOX_DEVELOPER_TOKEN"])
             if ai_text:
                 mapping_df = convert_response_to_df(ai_text)
                 full_mapping_df = pd.concat([full_mapping_df, mapping_df], ignore_index=True)
