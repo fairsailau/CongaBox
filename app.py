@@ -133,7 +133,7 @@ def navigate_folders(client, current_folder_id):
             selected_as_schema = st.session_state.get('schema_file_id') == item.id
 
             checkbox_changed = False
-            cb_key_suffix = item.id # Unique part of the key
+            cb_key_suffix = item.id 
 
             if file_extension == 'docx':
                 new_val_template = item_cols[2].checkbox("T", key=f"cb_template_{cb_key_suffix}", value=selected_as_template, help="Select as Template")
@@ -163,7 +163,6 @@ def navigate_folders(client, current_folder_id):
             if checkbox_changed:
                 st.rerun()
 
-
 def download_box_file(client, file_id):
     return client.file(file_id).content()
 
@@ -182,7 +181,7 @@ def extract_merge_fields(docx_content):
                         matches = re.findall(pattern, para_in_cell.text)
                         for match_text in matches: raw_fields.add(match_text.strip())
         
-        cleaned_fields = {re.split(r'\s*(?:\\@|\||&)', f, maxsplit=1)[0].strip() for f in raw_fields} # FIXED: maxsplit keyword
+        cleaned_fields = {re.split(r'\s*(?:\\@|\||&)', f, maxsplit=1)[0].strip() for f in raw_fields}
         
         if len(raw_fields) != len(cleaned_fields) or any(r != c for r, c in zip(sorted(list(raw_fields)), sorted(list(cleaned_fields)))):
             st.info(f"Cleaned merge fields. Original: {len(raw_fields)}. Core: {len(cleaned_fields)}")
@@ -221,11 +220,10 @@ def parse_conga_query(file_content, file_type):
     queries_to_parse = []
     if file_type == 'csv':
         try:
-            # Remove squeeze=True
-            df_read = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], skip_blank_lines=True)
-            if isinstance(df_read, pd.DataFrame): # If usecols returns a DataFrame (e.g. empty file or strange structure)
+            df_read = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], skip_blank_lines=True) # Removed squeeze
+            if isinstance(df_read, pd.DataFrame):
                 df_series = df_read.iloc[:, 0] if not df_read.empty else pd.Series(dtype=str)
-            else: # It's already a Series
+            else: 
                 df_series = df_read
             
             if not df_series.empty:
@@ -260,33 +258,45 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
     for mf in sorted(list(set(merge_fields))):
         mf_lower = mf.lower()
         possible_sources = []
-        for sobj, fields in sobject_to_fields_map.items():
-            sobj_clean_name = sobj.lower().replace("__c", "").replace("__r", "")
-            if mf_lower.startswith(sobj_clean_name) or mf_lower.replace("_", "").startswith(sobj_clean_name.replace("_","")):
-                if sobj not in [s.split(" ")[0] for s in possible_sources]: possible_sources.append(f"{sobj} (prefix match)")
-            else: 
+        for sobj in all_query_sobjects: # Iterate all query SObjects first for prefix matching
+            sobj_clean_prefix = sobj.lower().replace("__c", "").replace("__r", "") + "_"
+            if mf_lower.startswith(sobj_clean_prefix):
+                if sobj not in [s.split(" ")[0] for s in possible_sources]:
+                    possible_sources.append(f"{sobj} (prefix match)")
+                break # Found a strong prefix match for this SObject
+
+        if not possible_sources: # If no prefix match, check related query fields
+            for sobj, fields in sobject_to_fields_map.items():
                 for q_field in fields:
-                    q_field_core = q_field.split('.')[-1].lower() 
-                    if mf_lower == q_field_core or mf_lower in q_field_core or q_field_core in mf_lower :
-                        if sobj not in [s.split(" ")[0] for s in possible_sources]: possible_sources.append(f"{sobj} (related: {q_field})"); break 
-        hint = f" (Hint: check in SObject(s) - {'; '.join(possible_sources)[:150]})" if possible_sources else ""
+                    q_field_core = q_field.split('.')[-1].lower().replace("__c", "").replace("__r", "")
+                    mf_core = mf_lower.replace("__c", "").replace("__pc","") # Clean mf for comparison
+                    if mf_core == q_field_core or mf_core in q_field_core or q_field_core in mf_core:
+                        if sobj not in [s.split(" ")[0] for s in possible_sources]:
+                             possible_sources.append(f"{sobj} (related query field: {q_field})")
+                        break 
+                if len(possible_sources) > 1: break # Limit hints to first few found SObjects to reduce noise
+
+        hint = f" (Hint: Likely from SObject(s) - {'; '.join(possible_sources)[:200]})" if possible_sources else ""
         merge_fields_str_list.append(f"- {mf}{hint}")
+
     detailed_merge_fields_list = "\n".join(merge_fields_str_list)
     all_query_sobjects_str = ", ".join(sorted(list(all_query_sobjects))) if all_query_sobjects else "Not specified, use full schema"
+
     prompt = (
         "You are an AI assistant helping map fields from a Conga document generation system to a Box Doc Gen system. "
-        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API call). Use this schema file as the primary source of truth for Salesforce field paths.\n\n"
+        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API call). Use this schema file as the primary source of truth for Salesforce field paths and their data types.\n\n"
         "Conga Template Merge Fields to Map (each with a hint about potential source SObjects based on associated Conga queries):\n"
         f"{detailed_merge_fields_list}\n\n"
-        "The Conga queries (source of the above merge fields) primarily involve these Salesforce SObjects (consult the schema file for their detailed structure):\n"
+        "Primary Salesforce SObjects involved in the source Conga queries (consult the provided schema file for their detailed structure):\n"
         f"{all_query_sobjects_str}\n\n"
-        "Task: For each 'Conga Template Merge Field' from the list above, find its most relevant corresponding field path in the provided Salesforce schema file. "
-        "Use the hints next to each merge field and the SObject list to guide your search within the schema. The hints are suggestions; the schema file is authoritative for field paths.\n"
-        "Respond ONLY in CSV format with three columns: CongaField,BoxField,FieldType.\n"
-        "1. CongaField: The exact Conga merge field from the list (without the hint part).\n"
-        "2. BoxField: The full path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode). Use the '$' prefix for global objects like $User or $Organization if present in the schema. Ensure this path exists in the provided schema.\n"
-        "3. FieldType: The data type of the BoxField from the schema (e.g., Text, Number, Date, Boolean, Picklist, Id, RichText, Lookup, MasterDetail).\n"
-        "If a match is not clear in the schema for a CongaField, even after considering relationships suggested by the hints or schema structure, leave the BoxField and FieldType empty for that CongaField. Do not invent field paths.\n"
+        "TASK:\n"
+        "For EACH 'Conga Template Merge Field' listed above, provide its corresponding Salesforce field path from the schema file. Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc', it might map to a Salesforce field ending in '__c' or '__pc'.\n"
+        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data, starting with the header row 'CongaField,BoxField,FieldType', followed by data rows. Do NOT include any explanations, notes, apologies, or text outside this CSV data. Each CongaField from the input list must appear exactly once in your CSV output.\n\n"
+        "CSV Columns:\n"
+        "1. CongaField: The exact Conga merge field (from the list above, without the hint).\n"
+        "2. BoxField: The full, valid path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode). Use '$' prefix for global objects like $User if in schema. If traversing relationships, ensure the path is valid according to the schema (e.g., Contact.Account.Name).\n"
+        "3. FieldType: The data type (e.g., Text, Number, Date, Boolean, Picklist, Id, RichText, Lookup, MasterDetail) from the schema for the BoxField.\n"
+        "If a CongaField cannot be confidently mapped to a field in the provided schema, leave its BoxField and FieldType columns BLANK. Do not invent field paths.\n"
         "Prioritize exact or very close name matches within the relevant SObject contexts identified by the hints.\n"
         "Example Row: Template_Account_Name,Account.Name,Text"
     )
@@ -299,8 +309,8 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
     data = {"prompt": prompt, "items": items_payload}
     model_used_msg = "Using default Box AI model."
     if model_id: data["model"] = model_id; model_used_msg = f"Using Box AI model: {model_id}"
-    st.info(model_used_msg); 
     
+    st.info(model_used_msg)
     displayed_data = data.copy()
     if len(json.dumps(displayed_data.get("prompt", ""))) > 1000:
         displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display for brevity)"
@@ -398,7 +408,7 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
         if merge_fields: st.success(f"Extracted {len(merge_fields)} merge fields.")
         else: st.warning("No merge fields found.")
         prog_bar.progress(0.3, text="Parsing Conga query...");
-        sobject_to_fields_map, _, all_query_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
+        sobject_to_fields_map, all_query_fields, all_query_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
         prog_bar.progress(0.4, text="Validating schema file ID...");
         schema_file_id = st.session_state.get('schema_file_id')
         if not schema_file_id: st.error("Schema file ID missing for AI call."); st.stop()
@@ -426,4 +436,4 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
         else: st.warning("No valid field mappings generated by Box AI.")
     except Exception as e:
         st.error(f"An error occurred during processing: {str(e)}"); import traceback; st.text(traceback.format_exc())
-        if 'prog_bar' in locals() and prog_bar is not None : prog_bar.empty() # Ensure progress bar is cleared
+        if 'prog_bar' in locals() and prog_bar is not None : prog_bar.empty()
