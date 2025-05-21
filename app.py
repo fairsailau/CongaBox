@@ -77,14 +77,11 @@ def navigate_folders(client, current_folder_id):
             item_cols[1].write(item.type.capitalize())
             file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
             
-            # Using " " for label to address warnings while keeping UI clean
             if file_extension == 'docx':
                 selected = item_cols[2].checkbox(" ", key=f"select_template_{item.id}", 
                                                   value=st.session_state.get('template_file_id') == item.id)
                 if selected:
-                    st.session_state['template_file_id'] = item.id
-                    st.session_state['template_file_name'] = item.name
-                    st.session_state['template_file_type'] = 'docx'
+                    st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name; st.session_state['template_file_type'] = 'docx'
                 elif st.session_state.get('template_file_id') == item.id:
                      st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None); st.session_state.pop('template_file_type', None)
             elif file_extension in ['txt', 'csv']:
@@ -150,7 +147,7 @@ def parse_conga_query(file_content, file_type):
             return [f for f in raw_fields if f] 
         st.warning(f"Conga query regex (for TXT files) did not find fields."); return []
 
-def flatten_json(y, prefix=''):
+def flatten_json(y, prefix=''): # Retained for potential future use or debugging
     out = {}
     def flatten(x, name=''):
         if isinstance(x, dict):
@@ -165,13 +162,13 @@ def flatten_json(y, prefix=''):
 #     for i in range(0, len(items), chunk_size):
 #         yield dict(items[i:i + chunk_size])
 
-def generate_prompt_single_call(merge_fields, conga_fields): # MODIFIED for single call
+def generate_prompt_single_call(merge_fields, conga_fields):
     merge_fields_str = ", ".join(merge_fields)
     conga_fields_str = ", ".join(conga_fields)
     
     prompt = (
         "You are an AI assistant helping map fields from a Conga document generation system to a Box Doc Gen system. "
-        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API).\n\n" # Instruct AI to use the file
+        "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API).\n\n"
         "Conga Template Merge Fields:\n"
         f"{merge_fields_str}\n\n"
         "Fields from Conga Query (likely Salesforce source fields from the main object or related objects mentioned in the schema file):\n"
@@ -193,39 +190,91 @@ def call_box_ai(prompt, grounding_file_id, developer_token):
     items_payload = []
     if grounding_file_id:
         items_payload.append({"type": "file", "id": str(grounding_file_id), "content_type": "text_content"})
-    else: st.error("CRITICAL: grounding_file_id missing for call_box_ai.") # Should not happen if logic is correct
+    else: 
+        st.error("CRITICAL: grounding_file_id missing for call_box_ai. API may fail.")
     
     data = {"prompt": prompt, "items": items_payload}
     
     st.info("Box AI Request Payload (see console/logs for full details):")
     st.json(data) 
     print(f"--- Sending Box AI Request ---\nURL: {url}\nHeaders: {json.dumps(headers, indent=2)}\nPayload: {json.dumps(data, indent=2)}\n-----------------------------")
+    
     response = requests.post(url, headers=headers, json=data)
+    
     print(f"--- Received Box AI Response ---\nStatus Code: {response.status_code}")
-    try: print(f"Response Body: {json.dumps(response.json(), indent=2)}")
-    except json.JSONDecodeError: print(f"Response Body (Non-JSON): {response.text}")
-    except Exception as e: print(f"Could not process Box AI response for logging: {e}\nRaw: {response.text}")
+    response_text_for_return = None
+    try: 
+        response_data = response.json()
+        print(f"Response Body: {json.dumps(response_data, indent=2)}")
+        if response.status_code == 200:
+            response_text_for_return = response_data.get("answer", "") # CORRECTED
+    except json.JSONDecodeError: 
+        print(f"Response Body (Non-JSON): {response.text}")
+        if response.status_code == 200: # If status is OK but not JSON, maybe it's plain text? Unlikely for this API.
+            response_text_for_return = response.text 
+    except Exception as e: 
+        print(f"Could not process Box AI response for logging: {e}\nRaw: {response.text}")
     print("-----------------------------")
-    if response.status_code == 200: return response.json().get("completion", "")
-    else: st.error(f"Box AI request failed: {response.status_code} — {response.text}"); return None
+
+    if response.status_code == 200: 
+        return response_text_for_return
+    else: 
+        st.error(f"Box AI request failed: {response.status_code} — {response.text}"); 
+        return None
 
 def convert_response_to_df(text):
-    if not text or not isinstance(text, str): st.warning("AI response empty/invalid."); return pd.DataFrame()
-    lines = text.strip().splitlines()
+    if not text or not isinstance(text, str):
+        st.warning("AI response was empty or not a string.")
+        return pd.DataFrame()
+
+    csv_match = re.search(r"```csv\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    if csv_match:
+        csv_text = csv_match.group(1).strip()
+        st.info("Extracted CSV block from AI response.")
+    else:
+        csv_text = text.strip()
+        st.info("No explicit CSV markdown block (```csv...```) found, attempting to parse response as is or find header.")
+
+    lines = csv_text.strip().splitlines()
+    
     header_idx = -1
+    expected_headers = ["CongaField", "BoxField", "FieldType"]
     for i, line in enumerate(lines):
-        if "CongaField" in line and "BoxField" in line: header_idx = i; break
-    if header_idx == -1: st.warning("CSV header not in AI response."); st.text_area("AI Response", text, height=150); return pd.DataFrame()
-    header = [h.strip() for h in lines[header_idx].split(",")]
+        if all(expected_header in line for expected_header in expected_headers):
+            header_idx = i
+            break
+    
+    if header_idx == -1:
+        st.warning(f"CSV header ({', '.join(expected_headers)}) not found in processed AI response.")
+        st.text_area("Processed AI Text (for debugging)", csv_text, height=100)
+        st.text_area("Original AI Response (for debugging)", text, height=150)
+        return pd.DataFrame()
+
+    header_from_ai = [h.strip() for h in lines[header_idx].split(",")]
     data_lines = lines[header_idx+1:]
     data = []
-    for line in data_lines:
-        split_line = [val.strip() for val in line.split(",")]
-        if len(split_line) == len(header): data.append(split_line)
-        elif len(split_line) > len(header) and len(header) == 3: data.append([split_line[0], split_line[1], ",".join(split_line[2:])])
-        else: st.warning(f"Skipping malformed CSV line (cols {len(split_line)} vs {len(header)}): {line}")
-    if not data: st.warning("No valid data rows in AI response."); st.text_area("AI Response", text, height=150); return pd.DataFrame()
-    return pd.DataFrame(data, columns=header)
+
+    for line_num, line_content in enumerate(data_lines):
+        line_content_stripped = line_content.strip()
+        if not line_content_stripped: continue
+        
+        split_line = [val.strip() for val in line_content_stripped.split(",")]
+
+        if len(split_line) == len(header_from_ai):
+            data.append(split_line)
+        elif len(split_line) > len(header_from_ai) and len(header_from_ai) == 3:
+            data.append([split_line[0], split_line[1], ",".join(split_line[2:])])
+        elif len(split_line) > 0 :
+             st.warning(f"Skipping malformed CSV line #{header_idx+2+line_num} (cols {len(split_line)} vs {len(header_from_ai)}): '{line_content_stripped}'")
+
+    if not data:
+        st.warning("No valid data rows extracted from AI response.")
+        st.text_area("Processed AI Text (for debugging)", csv_text, height=100)
+        st.text_area("Original AI Response (for debugging)", text, height=150)
+        return pd.DataFrame()
+        
+    return pd.DataFrame(data, columns=header_from_ai)
+
 
 if 'current_folder' not in st.session_state: st.session_state['current_folder'] = "0"
 st.title("Conga Template to Box Doc Gen Mapper")
@@ -246,12 +295,12 @@ if st.button("Generate Field Mapping"):
         st.warning("Please select DOCX template, TXT/CSV query, and JSON schema files."); st.stop()
 
     st.info("Processing selected files and generating mapping...")
-    progress_bar_main = st.progress(0.0, text="Initializing...") # Main progress bar
+    progress_bar_main = st.progress(0.0, text="Initializing...")
     try:
         progress_bar_main.progress(0.1, text="Downloading files...")
         template_content = download_box_file(client, st.session_state['template_file_id'])
         query_content = download_box_file(client, st.session_state['query_file_id'])
-        schema_content = download_box_file(client, st.session_state['schema_file_id'])
+        schema_content = download_box_file(client, st.session_state['schema_file_id']) # For loading JSON
         
         progress_bar_main.progress(0.2, text="Extracting merge fields...")
         merge_fields = extract_merge_fields(template_content)
@@ -260,19 +309,14 @@ if st.button("Generate Field Mapping"):
         
         progress_bar_main.progress(0.3, text="Parsing Conga query...")
         conga_fields = parse_conga_query(query_content, st.session_state['query_file_type'])
-        # parse_conga_query now handles its own st.success/info/warning
         
-        progress_bar_main.progress(0.4, text="Loading schema...")
-        try: schema_data = json.loads(schema_content.decode('utf-8'))
+        progress_bar_main.progress(0.4, text="Loading schema for context...")
+        try: 
+            schema_data_for_info = json.loads(schema_content.decode('utf-8')) # For potential info display
+            st.success(f"Schema JSON file loaded successfully (will be passed to AI by ID).")
         except json.JSONDecodeError as je: st.error(f"Invalid JSON schema: {je}"); st.stop()
-        # flat_schema = flatten_json(schema_data) # No longer needed to send in prompt text for single-call
-        # if flat_schema: st.success(f"Schema loaded ({len(flat_schema)} flattened paths).") # For info only
-        # else: st.warning("Schema empty or not flattened."); flat_schema={}
-        st.success(f"Schema JSON file loaded successfully.")
-
 
         if not merge_fields: st.error("No merge fields to map."); st.stop()
-        # if not flat_schema: st.error("No schema data to map against."); st.stop() # No longer directly check flat_schema for stopping
 
         schema_file_id_for_ai = st.session_state.get('schema_file_id')
         if not schema_file_id_for_ai: st.error("Schema file ID missing for AI call."); st.stop()
@@ -287,9 +331,9 @@ if st.button("Generate Field Mapping"):
         if ai_response_text:
             mapping_df_chunk = convert_response_to_df(ai_response_text)
             if not mapping_df_chunk.empty:
-                full_mapping_df = pd.concat([full_mapping_df, mapping_df_chunk], ignore_index=True)
+                full_mapping_df = pd.concat([full_mapping_df, mapping_df_chunk], ignore_index=True) # Though only one chunk now
         else:
-            st.warning("No response or error from Box AI.")
+            st.warning("No response text received from Box AI to process.") # Clarified message
         
         progress_bar_main.progress(1.0, text="Completed!")
         progress_bar_main.empty()
