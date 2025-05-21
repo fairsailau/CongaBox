@@ -1,120 +1,3 @@
-import streamlit as st
-from docx import Document
-import pandas as pd
-import json
-import re
-import io
-import requests
-from boxsdk import OAuth2, Client
-
-st.set_page_config(page_title="Conga to Box Doc Gen", layout="centered")
-
-# --- AI Model Configuration ---
-# IMPORTANT: Replace placeholder model IDs with actual valid model IDs provided by Box
-# for the /ai/text_gen endpoint if you want to use specific models.
-# If a model ID is set to None or an empty string, the 'model' parameter will be omitted,
-# and Box will use its default text generation model.
-BOX_AI_MODELS = {
-    "Default (Let Box Choose)": None,
-    # Example: "box-claude-2.1-gen-001" (This is a hypothetical ID, get actual IDs from Box)
-    "Example Model A (e.g., Balanced)": "placeholder-model-id-a", 
-    "Example Model B (e.g., Creative/Powerful)": "placeholder-model-id-b",
-}
-# --- End AI Model Configuration ---
-
-# Box API configuration
-def get_box_client():
-    client_id = st.secrets["box"]["BOX_CLIENT_ID"]
-    client_secret = st.secrets["box"]["BOX_CLIENT_SECRET"]
-    developer_token = st.secrets["box"]["BOX_DEVELOPER_TOKEN"]
-    
-    oauth = OAuth2(
-        client_id=client_id,
-        client_secret=client_secret,
-        access_token=developer_token,
-    )
-    client = Client(oauth)
-    return client
-
-def get_folder_contents(client, folder_id):
-    folder = client.folder(folder_id).get(fields=['name', 'parent'])
-    items = client.folder(folder_id).get_items()
-    return folder, items
-
-def navigate_folders(client, current_folder_id):
-    folder, items = get_folder_contents(client, current_folder_id)
-    
-    path_parts = []
-    ancestor_tracer = folder
-    
-    while True:
-        if not hasattr(ancestor_tracer, 'parent') or not ancestor_tracer.parent:
-            break 
-        parent_ref = ancestor_tracer.parent
-        if parent_ref.id == "0":
-            break 
-        try:
-            parent_full_obj = client.folder(parent_ref.id).get(fields=["name", "parent"])
-        except Exception as e:
-            st.warning(f"Could not retrieve parent folder details for ID {parent_ref.id}: {e}")
-            break
-        path_parts.insert(0, {"id": parent_full_obj.id, "name": parent_full_obj.name})
-        ancestor_tracer = parent_full_obj
-    
-    breadcrumb_cols = st.columns(len(path_parts) + 1) 
-    breadcrumb_cols[0].button("Root", key="nav_root_button", 
-                              on_click=lambda: st.session_state.update({"current_folder": "0"}))
-    
-    for i, part in enumerate(path_parts):
-        breadcrumb_cols[i+1].button(
-            part["name"], 
-            key=f"nav_breadcrumb_{part['id']}", 
-            on_click=lambda folder_id_val=part["id"]: st.session_state.update({"current_folder": folder_id_val})
-        )
-    
-    st.subheader(f"Folder: {folder.name}")
-    header_cols = st.columns([0.7, 0.2, 0.1])
-    header_cols[0].write("Name")
-    header_cols[1].write("Type")
-    header_cols[2].write("Select")
-        
-    for item in items:
-        item_cols = st.columns([0.7, 0.2, 0.1])
-        if item.type == "folder":
-            item_cols[0].write(f"📁 {item.name}")
-            item_cols[1].write("Folder")
-            item_cols[2].button("Open", key=f"open_folder_{item.id}", 
-                                on_click=lambda folder_id_val=item.id: st.session_state.update({"current_folder": folder_id_val}))
-        else:
-            item_cols[0].write(f"📄 {item.name}")
-            item_cols[1].write(item.type.capitalize())
-            file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
-            
-            if file_extension == 'docx':
-                selected = item_cols[2].checkbox(" ", key=f"select_template_{item.id}", 
-                                                  value=st.session_state.get('template_file_id') == item.id)
-                if selected:
-                    st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name; st.session_state['template_file_type'] = 'docx'
-                elif st.session_state.get('template_file_id') == item.id:
-                     st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None); st.session_state.pop('template_file_type', None)
-            elif file_extension in ['txt', 'csv']:
-                selected = item_cols[2].checkbox(" ", key=f"select_query_{item.id}", 
-                                                  value=st.session_state.get('query_file_id') == item.id)
-                if selected:
-                    st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
-                elif st.session_state.get('query_file_id') == item.id:
-                     st.session_state.pop('query_file_id', None); st.session_state.pop('query_file_name', None); st.session_state.pop('query_file_type', None)
-            elif file_extension == 'json':
-                selected = item_cols[2].checkbox(" ", key=f"select_schema_{item.id}", 
-                                                  value=st.session_state.get('schema_file_id') == item.id)
-                if selected:
-                    st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name; st.session_state['schema_file_type'] = 'json'
-                elif st.session_state.get('schema_file_id') == item.id:
-                     st.session_state.pop('schema_file_id', None); st.session_state.pop('schema_file_name', None); st.session_state.pop('schema_file_type', None)
-
-def download_box_file(client, file_id):
-    return client.file(file_id).content()
-
 def extract_merge_fields(docx_content):
     with io.BytesIO(docx_content) as docx_bytes:
         document = Document(docx_bytes)
@@ -133,7 +16,6 @@ def extract_merge_fields(docx_content):
         
         cleaned_fields = set()
         for field in raw_fields:
-            # Split by \@ or | or even & to remove common formatters/parameters
             core_field = re.split(r'\s*(?:\\@|\||&)', field, 1)[0] 
             cleaned_fields.add(core_field.strip())
         
@@ -141,66 +23,70 @@ def extract_merge_fields(docx_content):
             st.info(f"Cleaned merge fields. Original unique tags found: {len(raw_fields)}. Core fields for AI: {len(cleaned_fields)}")
         return list(cleaned_fields)
 
-
 def parse_conga_query(file_content, file_type):
     sobject_to_fields_map = {}
     all_unique_fields = set()
     all_unique_sobjects = set()
 
-    def process_soql_string(query_text):
-        query_text = str(query_text).strip()
-        if not ("select " in query_text.lower() and " from " in query_text.lower()):
-            return False
-
-        from_match = re.search(r"from\s+([a-zA-Z0-9_]+(?:__c|__r)?)\b", query_text, re.IGNORECASE)
-        current_sobject = from_match.group(1) if from_match else None
-        
-        if current_sobject:
-            all_unique_sobjects.add(current_sobject)
-            if current_sobject not in sobject_to_fields_map:
-                sobject_to_fields_map[current_sobject] = set()
-
-        select_match = re.search(r"select\s+(.+?)\s+from", query_text, re.IGNORECASE | re.DOTALL)
-        if select_match:
-            fields_segment = select_match.group(1)
-            current_query_fields = re.findall(r"([\w\._()]+(?:\s+AS\s+[\w\._]+)?)(?:\s*,|\s+FROM)", fields_segment + " FROM", re.IGNORECASE | re.DOTALL)
+    def extract_from_soql_list(query_text_list):
+        processed_queries_count = 0
+        for query_text_item in query_text_list:
+            query_text_item = str(query_text_item).strip()
+            if not query_text_item: continue
             
-            cleaned_query_fields = {f.strip() for f in current_query_fields if f.strip()}
-            all_unique_fields.update(cleaned_query_fields)
-            if current_sobject:
-                sobject_to_fields_map[current_sobject].update(cleaned_query_fields)
-            return True
-        return False
+            from_match = re.search(r"from\s+([a-zA-Z0-9_]+(?:__c|__r)?)\b", query_text_item, re.IGNORECASE)
+            current_sobject_from_query = from_match.group(1) if from_match else None # Renamed
+            
+            if current_sobject_from_query: # Use the renamed variable
+                all_unique_sobjects.add(current_sobject_from_query)
+                if current_sobject_from_query not in sobject_to_fields_map:
+                    sobject_to_fields_map[current_sobject_from_query] = set()
+
+            if "select " in query_text_item.lower() and " from " in query_text_item.lower():
+                processed_queries_count +=1
+                select_match = re.search(r"select\s+(.+?)\s+from", query_text_item, re.IGNORECASE | re.DOTALL)
+                if select_match:
+                    fields_segment = select_match.group(1)
+                    current_query_fields_list = re.findall(r"([\w\._()]+(?:\s+AS\s+[\w\._]+)?)(?:\s*,|\s+FROM)", fields_segment + " FROM", re.IGNORECASE | re.DOTALL)
+                    
+                    cleaned_query_fields_set = {f.strip() for f in current_query_fields_list if f.strip()} # Renamed
+                    all_unique_fields.update(cleaned_query_fields_set)
+                    if current_sobject_from_query: # Use the renamed variable
+                        sobject_to_fields_map[current_sob_from_query].update(cleaned_query_fields_set)
+        return processed_queries_count
 
     queries_to_parse = []
     if file_type == 'csv':
         try:
+            # Attempt to read the first column as a series of queries
             df = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], squeeze=True, skip_blank_lines=True)
             if isinstance(df, pd.Series):
                 queries_to_parse = df.dropna().astype(str).tolist()
-            elif isinstance(df, pd.DataFrame) and not df.empty:
+            elif isinstance(df, pd.DataFrame) and not df.empty: # Should ideally be handled by squeeze=True
                  queries_to_parse = df.iloc[:,0].dropna().astype(str).tolist()
             
             if queries_to_parse:
                  st.info(f"CSV: Processing {len(queries_to_parse)} lines from the first column as potential SOQL queries.")
             else: # Fallback if squeeze didn't work or CSV not as expected
                 st.warning("CSV query file could not be parsed as a list of queries. Trying column headers as fallback.")
-                df_headers = pd.read_csv(io.BytesIO(file_content), nrows=0)
+                # Reread to get actual headers if the squeeze approach failed
+                df_headers = pd.read_csv(io.BytesIO(file_content), nrows=0) 
                 all_unique_fields.update([str(col).strip() for col in df_headers.columns])
                 st.info(f"CSV (Fallback): Using column headers as query fields: {list(all_unique_fields)}")
-                # For this fallback, we don't know the SObject, so map is less useful.
-                # We could put all fields under a generic key or leave sobject_to_fields_map empty.
                 if all_unique_fields:
                     sobject_to_fields_map["UnknownFromCSVHeaders"] = set(all_unique_fields)
-                return list(all_unique_fields), list(all_unique_sobjects) # SObjects might be empty here
+                # Important: Return here for this fallback case
+                final_map_for_fallback = {k: sorted(list(v)) for k, v in sobject_to_fields_map.items()}
+                return final_map_for_fallback, all_unique_fields, all_unique_sobjects
+
 
         except Exception as e:
             st.error(f"Error parsing CSV query file: {e}. Attempting fallback to TXT parsing.")
             try: 
-                return parse_conga_query(file_content, 'txt')
+                return parse_conga_query(file_content, 'txt') # Recursive call
             except Exception as e_txt:
                  st.error(f"Fallback to TXT parsing also failed: {e_txt}")
-                 return {}, set(), set()
+                 return {}, set(), set() # Return empty structures on complete failure
     
     elif file_type == 'txt':
         text_content = file_content.decode("utf-8")
@@ -211,15 +97,14 @@ def parse_conga_query(file_content, file_type):
         return {}, set(), set()
 
     processed_count = 0
-    for query_str in queries_to_parse:
-        if process_soql_string(query_str):
-            processed_count += 1
+    if queries_to_parse: # Ensure there are queries before calling extract
+        processed_count = extract_from_soql_list(queries_to_parse)
     
     if processed_count > 0:
         st.success(f"{file_type.upper()}: Processed {processed_count} SOQL queries. Found {len(all_unique_fields)} unique fields across {len(all_unique_sobjects)} SObjects.")
-    elif queries_to_parse: # If there were things to parse but none were processed
+    elif queries_to_parse: 
         st.warning(f"{file_type.upper()}: No SOQL queries were successfully processed from {len(queries_to_parse)} candidates.")
-    else: # No queries found at all
+    else: 
         st.warning(f"{file_type.upper()}: No query strings found to process.")
 
 
@@ -234,14 +119,16 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
         possible_sources = []
         for sobj, fields in sobject_to_fields_map.items():
             sobj_clean_name = sobj.lower().replace("__c", "").replace("__r", "")
-            if mf_lower.startswith(sobj_clean_name) or mf_lower.replace("_", "").startswith(sobj_clean_name):
+            if mf_lower.startswith(sobj_clean_name) or \
+               mf_lower.replace("_", "").startswith(sobj_clean_name.replace("_","")):
                 if sobj not in [s.split(" ")[0] for s in possible_sources]:
                     possible_sources.append(f"{sobj} (prefix match)")
-            else:
+            else: 
                 for q_field in fields:
-                    if mf_lower in q_field.lower() or q_field.lower() in mf_lower:
+                    q_field_core = q_field.split('.')[-1].lower() 
+                    if mf_lower == q_field_core or mf_lower in q_field_core or q_field_core in mf_lower :
                         if sobj not in [s.split(" ")[0] for s in possible_sources]:
-                             possible_sources.append(f"{sobj} (related: {q_field})")
+                             possible_sources.append(f"{sobj} (related query field: {q_field})")
                         break 
         hint = ""
         if possible_sources:
@@ -279,7 +166,9 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
     
     data = {"prompt": prompt, "items": items_payload}
     model_used_message = "Using default Box AI model."
-    if model_id and model_id != "None": # Check against string "None" if it might come from selectbox
+    # Check if model_id is not None and not the string "None" (if it might come from selectbox directly)
+    # And ensure it's not the value representing the default choice if your dict has a specific key for default
+    if model_id: 
         data["model"] = model_id
         model_used_message = f"Using Box AI model: {model_id}"
     
@@ -325,7 +214,7 @@ def convert_response_to_df(text):
     header_idx = -1
     expected_headers_check = ["CongaField", "BoxField"] 
     for i, line in enumerate(lines):
-        if all(expected_header.lower() in line.lower() for expected_header in expected_headers_check): # case-insensitive check
+        if all(expected_header.lower() in line.lower() for expected_header in expected_headers_check):
             header_idx = i
             break
     
@@ -353,34 +242,36 @@ def convert_response_to_df(text):
 
         split_line_values = [val.strip() for val in line_content_stripped.split(",")]
         
-        row_data = {}
+        row_data = {col: "" for col in final_columns} 
+
         # Try to map based on expected column names, being flexible with AI's header naming
-        for i, col_name_expected in enumerate(final_columns):
-            found_val = None
-            for j, ai_header in enumerate(header_from_ai_raw):
-                if ai_header.lower() == col_name_expected.lower():
-                    if j < len(split_line_values):
-                        found_val = split_line_values[j]
+        mapped_successfully_by_header_name = False
+        temp_ai_headers_lower = [h.lower() for h in header_from_ai_raw]
+
+        for i, expected_col_name in enumerate(final_columns):
+            try:
+                # Find index of expected_col_name in AI's headers (case-insensitive)
+                ai_col_idx = temp_ai_headers_lower.index(expected_col_name.lower())
+                if ai_col_idx < len(split_line_values):
                     # If it's the last expected column and there are more split values, join them
-                    if col_name_expected == final_columns[-1] and j < len(split_line_values) and len(split_line_values) > len(header_from_ai_raw):
-                         found_val = ",".join(split_line_values[j:])
-                    break 
-            row_data[col_name_expected] = found_val if found_val is not None else ""
+                    if expected_col_name == final_columns[-1] and ai_col_idx < len(split_line_values) and len(split_line_values) > len(header_from_ai_raw):
+                        row_data[expected_col_name] = ",".join(split_line_values[ai_col_idx:])
+                    else:
+                        row_data[expected_col_name] = split_line_values[ai_col_idx]
+                    mapped_successfully_by_header_name = True 
+            except ValueError: # Header not found in AI's list
+                pass # Keep default empty string for this expected_col_name
 
-
-        # Fallback if above mapping is insufficient (e.g. AI gives fewer columns than expected)
-        if not any(row_data.values()): # If all values are empty from mapping
-            if len(split_line_values) == 1:
-                row_data["CongaField"] = split_line_values[0]
-            elif len(split_line_values) == 2:
-                row_data["CongaField"] = split_line_values[0]
-                row_data["BoxField"] = split_line_values[1]
-            elif len(split_line_values) >= 3:
-                row_data["CongaField"] = split_line_values[0]
-                row_data["BoxField"] = split_line_values[1]
-                row_data["FieldType"] = ",".join(split_line_values[2:]) # Join if FieldType had commas
+        # If mapping by header name didn't populate CongaField (crucial field), try positional.
+        if not row_data["CongaField"]:
+            if len(split_line_values) >= 1: row_data["CongaField"] = split_line_values[0]
+            if len(split_line_values) >= 2: row_data["BoxField"] = split_line_values[1]
+            if len(split_line_values) >= 3: row_data["FieldType"] = ",".join(split_line_values[2:])
         
-        processed_data_list.append(row_data)
+        if row_data["CongaField"]: # Only add if CongaField is populated
+            processed_data_list.append(row_data)
+        elif any(row_data.values()): 
+            st.info(f"Skipping row with empty CongaField but other data: {row_data}")
             
     if not processed_data_list:
         st.warning("No valid data rows extracted from AI response.")
@@ -391,37 +282,21 @@ def convert_response_to_df(text):
     return pd.DataFrame(processed_data_list, columns=final_columns)
 
 
-if 'current_folder' not in st.session_state: st.session_state['current_folder'] = "0"
-st.title("Conga Template to Box Doc Gen Mapper")
+# Main processing block (pasted from previous, ensure it's complete)
+if st.button("Generate Field Mapping", key="generate_mapping_button"): # Added key to button
+    if 'client' not in locals() or client is None: 
+        client = get_box_client() 
+        if client is None:
+            st.error("Box client could not be initialized. Please resolve errors in the sidebar and try again.")
+            st.stop()
 
-# --- UI for Model Selection ---
-st.sidebar.subheader("AI Configuration")
-# Ensure BOX_AI_MODELS is defined globally or passed appropriately
-model_display_names = list(BOX_AI_MODELS.keys())
-selected_model_display_name = st.sidebar.selectbox(
-    "Choose Box AI Model:",
-    options=model_display_names,
-    index=0 # Default to the first model in the list
-)
-selected_model_id = BOX_AI_MODELS[selected_model_display_name]
-# --- End UI for Model Selection ---
-
-
-with st.sidebar:
-    st.header("Box File Browser")
-    try:
-        client = get_box_client()
-        navigate_folders(client, st.session_state['current_folder']) 
-        st.subheader("Selected Files")
-        st.write(f"Template: {st.session_state.get('template_file_name', 'Not selected')}")
-        st.write(f"Query: {st.session_state.get('query_file_name', 'Not selected')}")
-        st.write(f"Schema: {st.session_state.get('schema_file_name', 'Not selected')}")
-    except Exception as e: st.error(f"Box connection/browsing error: {str(e)}"); client = None 
-
-if st.button("Generate Field Mapping"):
-    if 'client' not in locals() or client is None: st.error("Box client error."); st.stop()
     if not all([st.session_state.get(k) for k in ['template_file_id', 'query_file_id', 'schema_file_id']]):
         st.warning("Please select DOCX template, TXT/CSV query, and JSON schema files."); st.stop()
+
+    # Retrieve selected_model_id from session_state using the key from the selectbox
+    chosen_model_display_name_from_state = st.session_state.get("ai_model_selector", list(BOX_AI_MODELS_FOR_SELECTBOX.keys())[0])
+    final_selected_model_id = BOX_AI_MODELS_FOR_SELECTBOX.get(chosen_model_display_name_from_state)
+
 
     st.info("Processing selected files and generating mapping...")
     progress_bar_main = st.progress(0.0, text="Initializing...")
@@ -436,7 +311,7 @@ if st.button("Generate Field Mapping"):
         else: st.warning("No merge fields found.")
         
         progress_bar_main.progress(0.3, text="Parsing Conga query...")
-        sobject_to_fields_map, _, all_query_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
+        sobject_to_fields_map, all_query_fields, all_query_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
         
         progress_bar_main.progress(0.4, text="Validating schema file ID...")
         schema_file_id_for_ai = st.session_state.get('schema_file_id')
@@ -448,8 +323,15 @@ if st.button("Generate Field Mapping"):
         full_mapping_df = pd.DataFrame()
         
         progress_bar_main.progress(0.5, text="Calling Box AI...")
+        # Pass the more detailed sobject_to_fields_map and all_query_sobjects
         prompt_text = generate_prompt_single_call(merge_fields or [], sobject_to_fields_map, all_query_sobjects or [])
-        ai_response_text = call_box_ai(prompt_text, schema_file_id_for_ai, st.secrets["box"]["BOX_DEVELOPER_TOKEN"], selected_model_id)
+        
+        ai_response_text = call_box_ai(
+            prompt_text, 
+            schema_file_id_for_ai, 
+            st.secrets["box"]["BOX_DEVELOPER_TOKEN"], 
+            final_selected_model_id # Pass the chosen model ID
+        )
         
         progress_bar_main.progress(0.8, text="Processing AI response...")
         if ai_response_text:
@@ -464,10 +346,10 @@ if st.button("Generate Field Mapping"):
 
         if not full_mapping_df.empty:
             expected_cols = ["CongaField", "BoxField", "FieldType"]
-            for col in expected_cols:
+            for col in expected_cols: # Ensure all expected columns exist
                 if col not in full_mapping_df.columns:
                     full_mapping_df[col] = "" 
-            full_mapping_df = full_mapping_df[expected_cols] 
+            full_mapping_df = full_mapping_df[expected_cols] # Reorder/select to ensure consistent structure
 
             full_mapping_df.drop_duplicates(subset=['CongaField', 'BoxField'], inplace=True, keep='first')
             st.subheader("Generated Field Mapping")
@@ -479,7 +361,7 @@ if st.button("Generate Field Mapping"):
             st.warning("No valid field mappings generated by Box AI.")
     
     except Exception as e:
-        st.error(f"Processing error: {str(e)}")
+        st.error(f"An error occurred during processing: {str(e)}")
         import traceback
         st.text(traceback.format_exc())
         if 'progress_bar_main' in locals() and progress_bar_main is not None: progress_bar_main.empty()
