@@ -106,7 +106,7 @@ def extract_merge_fields(docx_content):
     with io.BytesIO(docx_content) as docx_bytes:
         document = Document(docx_bytes)
         fields = set()
-        pattern = r"\{\{(.*?)(\||\}\})"
+        pattern = r"\{\{(.*?)(?:\||\}\}|\\@)" # Adjusted to better handle formatting like \@
         for para in document.paragraphs:
             matches = re.findall(pattern, para.text)
             for match in matches: fields.add(match[0].strip())
@@ -119,48 +119,93 @@ def extract_merge_fields(docx_content):
         return list(fields)
 
 def parse_conga_query(file_content, file_type):
+    all_parsed_fields = set() 
+
     if file_type == 'csv':
         try:
-            df = pd.read_csv(io.BytesIO(file_content))
-            query_headers = list(df.columns)
-            if len(query_headers) == 1 and "select " in query_headers[0].lower() and " from " in query_headers[0].lower():
-                st.info("Attempting to parse SOQL query found in CSV header.")
-                text = query_headers[0] 
-                match = re.search(r"select\s+(.+?)\s+from", text, re.IGNORECASE | re.DOTALL)
+            df = pd.read_csv(io.BytesIO(file_content), header=None)
+            potential_query_column = None
+            if not df.empty:
+                first_cell_value = str(df.iloc[0, 0]).lower()
+                # Check if the first row looks like a header of queries or actual queries
+                if "select " in first_cell_value and " from " in first_cell_value:
+                    potential_query_column = df.iloc[:, 0] # Process all rows in first col
+                    st.info("CSV: Processing first column as SOQL queries, starting from first row.")
+                elif len(df) > 1: # If more than one row, assume header + data
+                    second_cell_value = str(df.iloc[1,0]).lower()
+                    if "select " in second_cell_value and " from " in second_cell_value:
+                         potential_query_column = df.iloc[1:, 0] # Skip header, process first col
+                         st.info("CSV: Skipped header, processing first column as SOQL queries.")
+                    else: # Fallback to original behavior: treat first row as headers
+                        st.info("CSV: First column of data rows does not look like SOQL. Treating first row as column headers.")
+                        df_with_header = pd.read_csv(io.BytesIO(file_content)) # Re-read with header
+                        all_parsed_fields.update(list(df_with_header.columns))
+                        return list(all_parsed_fields)
+                else: # Single row CSV
+                    if "select " in first_cell_value and " from " in first_cell_value: # is it a query?
+                        potential_query_column = df.iloc[:,0]
+                    else: # treat as header
+                        st.info("CSV: Single row, treating as column headers.")
+                        all_parsed_fields.update(list(df.columns)) # df was read with header=None, so columns are 0,1,2...
+                        df_with_header = pd.read_csv(io.BytesIO(file_content)) # Re-read with header
+                        all_parsed_fields.update(list(df_with_header.columns))
+                        return list(all_parsed_fields)
+
+
+            if potential_query_column is not None:
+                num_processed = 0
+                for idx, query_text_obj in potential_query_column.dropna().items():
+                    query_text = str(query_text_obj)
+                    if "select " in query_text.lower() and " from " in query_text.lower():
+                        num_processed += 1
+                        match = re.search(r"select\s+(.+?)\s+from", query_text, re.IGNORECASE | re.DOTALL)
+                        if match:
+                            fields_segment = match.group(1)
+                            raw_fields = [f.strip() for f in fields_segment.split(",")]
+                            all_parsed_fields.update([f for f in raw_fields if f])
+                if num_processed > 0 and all_parsed_fields:
+                     st.success(f"CSV: Extracted {len(all_parsed_fields)} unique fields from {num_processed} SOQL queries.")
+                elif num_processed > 0 :
+                     st.warning(f"CSV: Processed {num_processed} SOQL queries but extracted no fields.")
+                else:
+                     st.warning("CSV: No SOQL queries found to process in the expected column.")
+
+
+        except Exception as e:
+            st.error(f"Error parsing CSV query file: {e}. Trying to read as plain text SOQL.")
+            try:
+                text_content = file_content.decode("utf-8")
+                return parse_conga_query(text_content.encode("utf-8"), 'txt')
+            except Exception as e_txt:
+                st.error(f"Fallback to TXT parsing also failed: {e_txt}")
+                return []
+    
+    elif file_type == 'txt':  
+        text = file_content.decode("utf-8")
+        queries = re.split(r';\s*\n?|\n\s*(?=\S)', text) # Split by semicolon or newlines that precede content
+        num_processed = 0
+        for query_text in queries:
+            query_text = query_text.strip()
+            if not query_text: continue
+            if "select " in query_text.lower() and " from " in query_text.lower():
+                num_processed +=1
+                match = re.search(r"select\s+(.+?)\s+from", query_text, re.IGNORECASE | re.DOTALL)
                 if match:
                     fields_segment = match.group(1)
-                    raw_fields = [f.strip() for f in fields_segment.split(",")]
-                    parsed_fields = [f for f in raw_fields if f] 
-                    if parsed_fields:
-                        st.success(f"Successfully parsed fields from SOQL in CSV header: {len(parsed_fields)} fields found.")
-                        return parsed_fields
-                    else: st.warning("SOQL in CSV header matched regex, but no fields were extracted. Using full query string."); return query_headers 
-                else: st.warning("CSV header looks like SOQL but could not be parsed. Using full query string."); return query_headers 
-            else: return query_headers 
-        except Exception as e: st.warning(f"Could not parse CSV query file: {e}. Defaulting to empty."); return []
-    else:  
-        text = file_content.decode("utf-8")
-        match = re.search(r"select\s+(.+?)\s+from", text, re.IGNORECASE | re.DOTALL)
-        if match:
-            fields_segment = match.group(1)
-            raw_fields = [f.strip() for f in fields_segment.split(",")] 
-            return [f for f in raw_fields if f] 
-        st.warning(f"Conga query regex (for TXT files) did not find fields."); return []
+                    raw_fields = [f.strip() for f in fields_segment.split(",")] 
+                    all_parsed_fields.update([f for f in raw_fields if f])
+        if num_processed > 0 and all_parsed_fields:
+             st.success(f"TXT: Extracted {len(all_parsed_fields)} unique fields from {num_processed} SOQL queries.")
+        elif num_processed > 0:
+             st.warning(f"TXT: Processed {num_processed} SOQL queries but extracted no fields.")
+        else:
+             st.warning("TXT: No SOQL queries found to process.")
+    
+    else: 
+         st.error(f"Unsupported query file type: {file_type}")
 
-def flatten_json(y, prefix=''): # Retained for potential future use or debugging
-    out = {}
-    def flatten(x, name=''):
-        if isinstance(x, dict):
-            for a in x: flatten(x[a], f'{name}{a}.')
-        elif isinstance(x, list):
-            for i, a in enumerate(x): flatten(a, f'{name}{i}.')
-        else: out[name[:-1]] = str(x)
-    flatten(y, prefix); return out
+    return list(all_parsed_fields)
 
-# def chunk_dict(d, chunk_size=50): # No longer needed for single-call strategy
-#     items = list(d.items())
-#     for i in range(0, len(items), chunk_size):
-#         yield dict(items[i:i + chunk_size])
 
 def generate_prompt_single_call(merge_fields, conga_fields):
     merge_fields_str = ", ".join(merge_fields)
@@ -207,10 +252,10 @@ def call_box_ai(prompt, grounding_file_id, developer_token):
         response_data = response.json()
         print(f"Response Body: {json.dumps(response_data, indent=2)}")
         if response.status_code == 200:
-            response_text_for_return = response_data.get("answer", "") # CORRECTED
+            response_text_for_return = response_data.get("answer", "") 
     except json.JSONDecodeError: 
         print(f"Response Body (Non-JSON): {response.text}")
-        if response.status_code == 200: # If status is OK but not JSON, maybe it's plain text? Unlikely for this API.
+        if response.status_code == 200: 
             response_text_for_return = response.text 
     except Exception as e: 
         print(f"Could not process Box AI response for logging: {e}\nRaw: {response.text}")
@@ -258,22 +303,33 @@ def convert_response_to_df(text):
         line_content_stripped = line_content.strip()
         if not line_content_stripped: continue
         
+        if not line_content_stripped[0].isalnum() and line_content_stripped[0] not in ['{', '"', '('] : 
+            if len(line_content_stripped.split(",")) < 2 : 
+                 st.info(f"Skipping likely non-data line: '{line_content_stripped}'")
+                 continue
+
         split_line = [val.strip() for val in line_content_stripped.split(",")]
 
         if len(split_line) == len(header_from_ai):
             data.append(split_line)
         elif len(split_line) > len(header_from_ai) and len(header_from_ai) == 3:
             data.append([split_line[0], split_line[1], ",".join(split_line[2:])])
+        elif len(split_line) == 2 and len(header_from_ai) == 3:
+            data.append([split_line[0], split_line[1], ""])
+            st.info(f"Line #{header_idx+2+line_num} had 2 columns, assuming missing FieldType: '{line_content_stripped}'")
+        elif len(split_line) == 1 and len(header_from_ai) == 3 and split_line[0]:
+            data.append([split_line[0], "", ""])
+            st.info(f"Line #{header_idx+2+line_num} had 1 column, assuming only CongaField: '{line_content_stripped}'")
         elif len(split_line) > 0 :
              st.warning(f"Skipping malformed CSV line #{header_idx+2+line_num} (cols {len(split_line)} vs {len(header_from_ai)}): '{line_content_stripped}'")
-
+    
     if not data:
         st.warning("No valid data rows extracted from AI response.")
         st.text_area("Processed AI Text (for debugging)", csv_text, height=100)
         st.text_area("Original AI Response (for debugging)", text, height=150)
         return pd.DataFrame()
         
-    return pd.DataFrame(data, columns=header_from_ai)
+    return pd.DataFrame(data, columns=header_from_ai) if data else pd.DataFrame(columns=expected_headers)
 
 
 if 'current_folder' not in st.session_state: st.session_state['current_folder'] = "0"
@@ -300,7 +356,8 @@ if st.button("Generate Field Mapping"):
         progress_bar_main.progress(0.1, text="Downloading files...")
         template_content = download_box_file(client, st.session_state['template_file_id'])
         query_content = download_box_file(client, st.session_state['query_file_id'])
-        schema_content = download_box_file(client, st.session_state['schema_file_id']) # For loading JSON
+        # schema_content is not directly used for prompt text if AI uses the file by ID
+        # schema_content = download_box_file(client, st.session_state['schema_file_id']) 
         
         progress_bar_main.progress(0.2, text="Extracting merge fields...")
         merge_fields = extract_merge_fields(template_content)
@@ -309,17 +366,14 @@ if st.button("Generate Field Mapping"):
         
         progress_bar_main.progress(0.3, text="Parsing Conga query...")
         conga_fields = parse_conga_query(query_content, st.session_state['query_file_type'])
+        # parse_conga_query now handles its own st.success/info/warning
         
-        progress_bar_main.progress(0.4, text="Loading schema for context...")
-        try: 
-            schema_data_for_info = json.loads(schema_content.decode('utf-8')) # For potential info display
-            st.success(f"Schema JSON file loaded successfully (will be passed to AI by ID).")
-        except json.JSONDecodeError as je: st.error(f"Invalid JSON schema: {je}"); st.stop()
-
-        if not merge_fields: st.error("No merge fields to map."); st.stop()
-
+        progress_bar_main.progress(0.4, text="Validating schema file ID...")
         schema_file_id_for_ai = st.session_state.get('schema_file_id')
         if not schema_file_id_for_ai: st.error("Schema file ID missing for AI call."); st.stop()
+        st.success(f"Schema file ID {schema_file_id_for_ai} will be used for AI context.")
+
+        if not merge_fields: st.error("No merge fields to map."); st.stop()
 
         full_mapping_df = pd.DataFrame()
         
@@ -331,15 +385,16 @@ if st.button("Generate Field Mapping"):
         if ai_response_text:
             mapping_df_chunk = convert_response_to_df(ai_response_text)
             if not mapping_df_chunk.empty:
-                full_mapping_df = pd.concat([full_mapping_df, mapping_df_chunk], ignore_index=True) # Though only one chunk now
+                full_mapping_df = mapping_df_chunk # Since it's a single call, no concat needed
         else:
-            st.warning("No response text received from Box AI to process.") # Clarified message
+            st.warning("No response text received from Box AI to process.")
         
         progress_bar_main.progress(1.0, text="Completed!")
         progress_bar_main.empty()
 
         if not full_mapping_df.empty:
-            full_mapping_df.drop_duplicates(subset=['CongaField', 'BoxField'], inplace=True)
+            # Duplicates might still occur if AI lists the same mapping multiple times in its single response
+            full_mapping_df.drop_duplicates(subset=['CongaField', 'BoxField'], inplace=True, keep='first')
             st.subheader("Generated Field Mapping")
             st.dataframe(full_mapping_df)
             csv_buffer = io.StringIO()
