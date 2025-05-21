@@ -89,7 +89,6 @@ def navigate_folders(client, current_folder_id):
            not ancestor_tracer.parent or \
            ancestor_tracer.parent.id == "0":
             break 
-        
         parent_ref = ancestor_tracer.parent
         try:
             parent_full_obj = client.folder(parent_ref.id).get(fields=["name", "parent"])
@@ -127,41 +126,30 @@ def navigate_folders(client, current_folder_id):
                  st.rerun()
         else: 
             file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
-            
             selected_as_template = st.session_state.get('template_file_id') == item.id
             selected_as_query = st.session_state.get('query_file_id') == item.id
             selected_as_schema = st.session_state.get('schema_file_id') == item.id
-
             checkbox_changed = False
             cb_key_suffix = item.id 
-
             if file_extension == 'docx':
                 new_val_template = item_cols[2].checkbox("T", key=f"cb_template_{cb_key_suffix}", value=selected_as_template, help="Select as Template")
                 if new_val_template != selected_as_template:
-                    if new_val_template:
-                        st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name
-                    else:
-                        st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None)
+                    if new_val_template: st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name
+                    else: st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None)
                     checkbox_changed = True
             elif file_extension in ['txt', 'csv']:
                 new_val_query = item_cols[2].checkbox("Q", key=f"cb_query_{cb_key_suffix}", value=selected_as_query, help="Select as Query File")
                 if new_val_query != selected_as_query:
-                    if new_val_query:
-                        st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
-                    else:
-                        st.session_state.pop('query_file_id', None); st.session_state.pop('query_file_name', None); st.session_state.pop('query_file_type', None)
+                    if new_val_query: st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
+                    else: st.session_state.pop('query_file_id', None); st.session_state.pop('query_file_name', None); st.session_state.pop('query_file_type', None)
                     checkbox_changed = True
             elif file_extension == 'json':
                 new_val_schema = item_cols[2].checkbox("S", key=f"cb_schema_{cb_key_suffix}", value=selected_as_schema, help="Select as Schema File")
                 if new_val_schema != selected_as_schema:
-                    if new_val_schema:
-                        st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name
-                    else:
-                        st.session_state.pop('schema_file_id', None); st.session_state.pop('schema_file_name', None)
+                    if new_val_schema: st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name
+                    else: st.session_state.pop('schema_file_id', None); st.session_state.pop('schema_file_name', None)
                     checkbox_changed = True
-            
-            if checkbox_changed:
-                st.rerun()
+            if checkbox_changed: st.rerun()
 
 def download_box_file(client, file_id):
     return client.file(file_id).content()
@@ -180,9 +168,7 @@ def extract_merge_fields(docx_content):
                     for para_in_cell in cell.paragraphs:
                         matches = re.findall(pattern, para_in_cell.text)
                         for match_text in matches: raw_fields.add(match_text.strip())
-        
         cleaned_fields = {re.split(r'\s*(?:\\@|\||&)', f, maxsplit=1)[0].strip() for f in raw_fields}
-        
         if len(raw_fields) != len(cleaned_fields) or any(r != c for r, c in zip(sorted(list(raw_fields)), sorted(list(cleaned_fields)))):
             st.info(f"Cleaned merge fields. Original: {len(raw_fields)}. Core: {len(cleaned_fields)}")
         return list(cleaned_fields)
@@ -197,14 +183,11 @@ def parse_conga_query(file_content, file_type):
         for query_text_item in query_text_list:
             query_text_item = str(query_text_item).strip()
             if not query_text_item: continue
-            
             from_match = re.search(r"from\s+([a-zA-Z0-9_]+(?:__c|__r)?)\b", query_text_item, re.IGNORECASE)
             current_sobject_from_query = from_match.group(1) if from_match else None
-            
             if current_sobject_from_query:
                 all_unique_sobjects.add(current_sobject_from_query)
                 sobject_to_fields_map.setdefault(current_sobject_from_query, set())
-
             if "select " in query_text_item.lower() and " from " in query_text_item.lower():
                 processed_queries_count +=1
                 select_match = re.search(r"select\s+(.+?)\s+from", query_text_item, re.IGNORECASE | re.DOTALL)
@@ -220,32 +203,26 @@ def parse_conga_query(file_content, file_type):
     queries_to_parse = []
     if file_type == 'csv':
         try:
-            df_read = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], skip_blank_lines=True) # Removed squeeze
+            df_read = pd.read_csv(io.BytesIO(file_content), header=None, usecols=[0], skip_blank_lines=True)
             if isinstance(df_read, pd.DataFrame):
                 df_series = df_read.iloc[:, 0] if not df_read.empty else pd.Series(dtype=str)
-            else: 
-                df_series = df_read
-            
-            if not df_series.empty:
-                queries_to_parse = df_series.dropna().astype(str).tolist()
-            
+            else: df_series = df_read
+            if not df_series.empty: queries_to_parse = df_series.dropna().astype(str).tolist()
             if queries_to_parse: st.info(f"CSV: Processing {len(queries_to_parse)} lines from first column as SOQL.")
             else:
-                st.warning("CSV: No queries in first column after parsing. Using headers as fields if available.")
+                st.warning("CSV: No queries in first column. Using headers as fields if available.")
                 df_headers = pd.read_csv(io.BytesIO(file_content), nrows=0) 
                 all_unique_fields.update([str(col).strip() for col in df_headers.columns])
                 if all_unique_fields: 
                     sobject_to_fields_map["UnknownFromCSVHeaders"] = set(all_unique_fields)
                     st.info(f"CSV (Fallback): Using column headers as query fields: {list(all_unique_fields)}")
                 return {k: sorted(list(v)) for k,v in sobject_to_fields_map.items()}, all_unique_fields, all_unique_sobjects
-        except Exception as e:
-            st.error(f"Error parsing CSV: {e}. Trying as TXT."); return parse_conga_query(file_content, 'txt')
+        except Exception as e: st.error(f"Error parsing CSV: {e}. Trying as TXT."); return parse_conga_query(file_content, 'txt')
     elif file_type == 'txt':
         text_content = file_content.decode("utf-8")
         queries_to_parse = [q.strip() for q in re.split(r';\s*\n?|\n\s{2,}\n?|\n\s*$', text_content, flags=re.MULTILINE) if q.strip()]
         if queries_to_parse: st.info(f"TXT: Found {len(queries_to_parse)} potential SOQL.")
     else: st.error(f"Unsupported query file type: {file_type}"); return {}, set(), set()
-
     processed_count = extract_from_soql_list(queries_to_parse) if queries_to_parse else 0
     msg_type = file_type.upper()
     if processed_count > 0: st.success(f"{msg_type}: Processed {processed_count} SOQL. Fields: {len(all_unique_fields)}, SObjects: {len(all_unique_sobjects)}.")
@@ -258,45 +235,38 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
     for mf in sorted(list(set(merge_fields))):
         mf_lower = mf.lower()
         possible_sources = []
-        for sobj in all_query_sobjects: # Iterate all query SObjects first for prefix matching
+        for sobj in all_query_sobjects: 
             sobj_clean_prefix = sobj.lower().replace("__c", "").replace("__r", "") + "_"
             if mf_lower.startswith(sobj_clean_prefix):
-                if sobj not in [s.split(" ")[0] for s in possible_sources]:
-                    possible_sources.append(f"{sobj} (prefix match)")
-                break # Found a strong prefix match for this SObject
-
-        if not possible_sources: # If no prefix match, check related query fields
+                if sobj not in [s.split(" ")[0] for s in possible_sources]: possible_sources.append(f"{sobj} (prefix match)"); break 
+        if not possible_sources: 
             for sobj, fields in sobject_to_fields_map.items():
                 for q_field in fields:
                     q_field_core = q_field.split('.')[-1].lower().replace("__c", "").replace("__r", "")
-                    mf_core = mf_lower.replace("__c", "").replace("__pc","") # Clean mf for comparison
-                    if mf_core == q_field_core or mf_core in q_field_core or q_field_core in mf_core:
-                        if sobj not in [s.split(" ")[0] for s in possible_sources]:
-                             possible_sources.append(f"{sobj} (related query field: {q_field})")
-                        break 
-                if len(possible_sources) > 1: break # Limit hints to first few found SObjects to reduce noise
-
+                    mf_core = mf_lower.replace("__c", "").replace("__pc","") 
+                    if mf_core == q_field_core or mf_core in q_field_core or q_field_core in mf_core :
+                        if sobj not in [s.split(" ")[0] for s in possible_sources]: possible_sources.append(f"{sobj} (related query field: {q_field})"); break 
+                if len(possible_sources) > 1: break 
         hint = f" (Hint: Likely from SObject(s) - {'; '.join(possible_sources)[:200]})" if possible_sources else ""
         merge_fields_str_list.append(f"- {mf}{hint}")
-
     detailed_merge_fields_list = "\n".join(merge_fields_str_list)
     all_query_sobjects_str = ", ".join(sorted(list(all_query_sobjects))) if all_query_sobjects else "Not specified, use full schema"
-
     prompt = (
         "You are an AI assistant helping map fields from a Conga document generation system to a Box Doc Gen system. "
         "You have been provided with a Salesforce schema file as context (see the 'items' passed to the API call). Use this schema file as the primary source of truth for Salesforce field paths and their data types.\n\n"
         "Conga Template Merge Fields to Map (each with a hint about potential source SObjects based on associated Conga queries):\n"
         f"{detailed_merge_fields_list}\n\n"
-        "Primary Salesforce SObjects involved in the source Conga queries (consult the provided schema file for their detailed structure):\n"
+        "Primary Salesforce SObjects involved in the source Conga queries (consult the provided schema file for their fields and relationships):\n"
         f"{all_query_sobjects_str}\n\n"
         "TASK:\n"
-        "For EACH 'Conga Template Merge Field' listed above, provide its corresponding Salesforce field path from the schema file. Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc', it might map to a Salesforce field ending in '__c' or '__pc'.\n"
-        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data, starting with the header row 'CongaField,BoxField,FieldType', followed by data rows. Do NOT include any explanations, notes, apologies, or text outside this CSV data. Each CongaField from the input list must appear exactly once in your CSV output.\n\n"
+        "For EACH 'Conga Template Merge Field' listed above, provide its corresponding Salesforce field path from the schema file. Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc', it might map to a Salesforce field ending in '__c' or '__pc'. For fields like 'Today' or user-specific details, consider system variables like '$System.Today' or fields from the '$User' object (e.g., '$User.FirstName') if they exist in the schema.\n"
+        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data, starting with the header row 'CongaField,BoxField,FieldType', followed by data rows. Do NOT include any explanations, notes, apologies, or text outside this CSV data. Each CongaField from the input list must appear exactly once in your CSV output.\n"
+        "If a CongaField 'Conga_NoMatch_Field' cannot be mapped, the output row MUST be: Conga_NoMatch_Field,,\n\n"
         "CSV Columns:\n"
         "1. CongaField: The exact Conga merge field (from the list above, without the hint).\n"
-        "2. BoxField: The full, valid path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode). Use '$' prefix for global objects like $User if in schema. If traversing relationships, ensure the path is valid according to the schema (e.g., Contact.Account.Name).\n"
+        "2. BoxField: The full, valid path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode). Use '$' prefix for global objects like $User or $Organization if present in the schema. If traversing relationships, ensure the path is valid according to the schema (e.g., Contact.Account.Name).\n"
         "3. FieldType: The data type (e.g., Text, Number, Date, Boolean, Picklist, Id, RichText, Lookup, MasterDetail) from the schema for the BoxField.\n"
-        "If a CongaField cannot be confidently mapped to a field in the provided schema, leave its BoxField and FieldType columns BLANK. Do not invent field paths.\n"
+        "If a match is not clear in the schema for a CongaField, even after considering relationships suggested by the hints or schema structure, leave the BoxField and FieldType columns BLANK. Do not invent field paths.\n"
         "Prioritize exact or very close name matches within the relevant SObject contexts identified by the hints.\n"
         "Example Row: Template_Account_Name,Account.Name,Text"
     )
@@ -309,13 +279,11 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
     data = {"prompt": prompt, "items": items_payload}
     model_used_msg = "Using default Box AI model."
     if model_id: data["model"] = model_id; model_used_msg = f"Using Box AI model: {model_id}"
-    
-    st.info(model_used_msg)
+    st.info(model_used_msg); 
     displayed_data = data.copy()
     if len(json.dumps(displayed_data.get("prompt", ""))) > 1000:
         displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display for brevity)"
     st.info("Box AI Request Payload (see console for full details if large):"); st.json(displayed_data) 
-
     print(f"--- Sending Box AI Request ---\nURL: {url}\nModel: {data.get('model', 'Default')}\nPayload Len: {len(json.dumps(data))}\n-----------------------------")
     response = requests.post(url, headers=headers, json=data)
     print(f"--- Received Box AI Response (Status: {response.status_code}) ---")
@@ -347,10 +315,18 @@ def convert_response_to_df(text):
     data_list = []
     for line_num, line_content in enumerate(lines[header_idx+1:]):
         line_content_s = line_content.strip()
-        if not line_content_s or (not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '('] and line_content_s.count(',') < 1):
+        if not line_content_s: continue
+        if re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV", line_content_s, re.IGNORECASE) or \
+           (not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '('] and line_content_s.count(',') < min(1, len(final_cols)-2) ): # Use final_cols here
             if line_content_s: st.info(f"Skipping non-data line: '{line_content_s}'"); continue
         split_vals = [v.strip() for v in line_content_s.split(",")]
-        row_data = {col: "" for col in final_cols}
+        # Heuristic for space-separated values if comma split yields too few columns for the actual content
+        if len(split_vals) < len(final_cols) and line_content_s.count(',') < 2 and len(re.split(r'\s{2,}', line_content_s)) >= 2 :
+            alt_split_vals = re.split(r'\s{2,}', line_content_s)
+            if len(alt_split_vals) >=2 and len(alt_split_vals) <=len(final_cols): # Plausible number of columns
+                st.info(f"Line '{line_content_s}' has few commas, attempting split by multiple spaces -> {alt_split_vals}")
+                split_vals = alt_split_vals
+        row_data = {col: "" for col in final_cols} 
         mapped_successfully_by_header_name = False
         temp_ai_headers_lower = [h.lower() for h in header_from_ai_raw]
         for i_expected, expected_col_name in enumerate(final_cols):
@@ -408,7 +384,7 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
         if merge_fields: st.success(f"Extracted {len(merge_fields)} merge fields.")
         else: st.warning("No merge fields found.")
         prog_bar.progress(0.3, text="Parsing Conga query...");
-        sobject_to_fields_map, all_query_fields, all_query_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
+        sobject_to_fields_map, _, all_query_sobjects = parse_conga_query(query_content, st.session_state['query_file_type'])
         prog_bar.progress(0.4, text="Validating schema file ID...");
         schema_file_id = st.session_state.get('schema_file_id')
         if not schema_file_id: st.error("Schema file ID missing for AI call."); st.stop()
