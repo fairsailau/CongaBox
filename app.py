@@ -17,7 +17,7 @@ ALL_MODELS_WITH_DESC = {
     "azure__openai__gpt_4o_mini": "Azure OpenAI GPT-4o Mini: Lightweight multimodal model",
     "azure__openai__gpt_4o": "Azure OpenAI GPT-4o: Highly efficient multimodal model for complex tasks",
     "azure__openai__gpt_4_1": "Azure OpenAI GPT-4.1: Highly efficient multimodal model for complex tasks",
-    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks",
+    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks", 
     "azure__openai__gpt_o4-mini": "Azure OpenAI GPT o4-mini: Highly efficient multimodal model for complex tasks",
     "google__gemini_2_5_pro_preview": "Google Gemini 2.5 Pro: Optimal for high-volume, high-frequency tasks (Preview)",
     "google__gemini_2_5_flash_preview": "Google Gemini 2.5 Flash: Optimal for high-volume, high-frequency tasks (Preview)",
@@ -258,7 +258,7 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
                     if mf_core == q_field_core or mf_core in q_field_core or q_field_core in mf_core :
                         if sobj not in [s.split(" ")[0] for s in possible_sources]: possible_sources.append(f"{sobj} (related query field: {q_field})"); break 
                 if len(possible_sources) > 1: break 
-        hint = f" (Hint: Likely from SObject(s) - {'; '.join(possible_sources)[:200]})" if possible_sources else ""
+        hint = f" (Hint: Likely from SObject(s) - {'; '.join(possible_sources)[:200]})" if possible_sources else " (Hint: general search in schema needed)"
         merge_fields_str_list.append(f"- {mf}{hint}")
 
     detailed_merge_fields_list = "\n".join(merge_fields_str_list)
@@ -272,43 +272,56 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
         "Primary Salesforce SObjects involved in the source Conga queries (consult the provided schema file for their detailed structure and relationships):\n"
         f"{all_query_sobjects_str}\n\n"
         "IMPORTANT INSTRUCTIONS:\n"
-        "1. Schema Adherence: ALL BoxField paths MUST originate from the provided schema file. Do not invent fields or relationships.\n"
-        "2. Custom Fields: Salesforce custom fields typically end in '__c'. If a CongaField ends in '__pc' (e.g., MyField__pc), search the schema for 'SObject.MyField__pc' first. If not found, then search for 'SObject.MyField__c'.\n"
+        "1. Schema Adherence: ALL 'BoxField' paths MUST EXACTLY match paths in the provided schema file. Do not invent fields or relationships.\n"
+        "2. Custom Fields: Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc' (e.g., MyField__pc), first search the schema for 'SObject.MyField__pc'. If not found, then search for 'SObject.MyField__c'.\n"
         "3. Person Accounts: If the Salesforce org uses Person Accounts, CongaFields prefixed with 'ACCOUNT_PERSON' (e.g., ACCOUNT_PERSONBIRTHDATE, ACCOUNT_PERSONEMAIL) should map to the corresponding standard fields available on Person Accounts (e.g., Account.PersonBirthdate, Account.PersonEmail). These are standard fields, not custom fields ending in '__c'.\n"
-        "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should generally map to fields on the '$User' global object (e.g., '$User.City') IF in the schema. If context implies a user from a related record (e.g., 'Matter_Team_Members__c.User__r'), use that full path from the schema.\n"
+        "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should generally map to fields on the '$User' global object (e.g., '$User.City') IF in the schema. If context implies a user from a related record (e.g., from 'Matter_Team_Members__c.User__r' if listed as a primary SObject), use that full valid path from the schema.\n"
         "5. System Fields: For fields like 'Today', use system variables like '$System.Today' if appropriate and inferable from schema context as a Date/DateTime.\n"
         "6. Ambiguous 'ACCOUNT_' prefixed fields: For CongaFields starting with 'ACCOUNT_' that are not Person Account fields, first prioritize direct fields on the Account object from the schema. If not found, then consider fields on a primary related Contact or a custom 'Client' object if such relationships are evident in the 'Primary Salesforce SObjects' list and the schema.\n\n"
         "TASK:\n"
         "For EACH 'Conga Template Merge Field' from the list above, provide its corresponding Salesforce field path from the schema file. "
         "Use the hints next to each merge field and the SObject list to guide your search within the schema. The hints are suggestions; the schema file is authoritative.\n"
-        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data. Start with the exact header row 'CongaField,BoxField,FieldType', followed by data rows. Each CongaField from the input list must appear exactly once in your CSV output on its own row. Each data row MUST have exactly three values separated by single commas. Do NOT include ANY text, notes, explanations, apologies, or conversational remarks before, after, or within the CSV data cells themselves. If you are uncertain about a mapping for a CongaField, output the CongaField name in the first column, and leave the BoxField and FieldType columns COMPLETELY BLANK for that row. Example of a blank mapping: 'UncertainCongaField,,'\n"
-        "Do not use tabs or multiple spaces as delimiters instead of commas. Do not add extra quotes unless a value itself contains a comma that needs escaping.\n"
-        "Failure to follow this CSV format will render the output unusable.\n\n"
+        "STRICT OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data. "
+        "1. Start with the exact header row: CongaField,BoxField,FieldType\n"
+        "2. Each subsequent line is a data row. Each data row MUST correspond to one CongaField from the input list.\n"
+        "3. Each data row MUST have exactly three values, separated by a SINGLE comma.\n"
+        "   - Correct Mapped Row: ActualCongaField,Account.Actual_Salesforce_Field__c,Text\n"
+        "   - Correct Unmapped Row: UnmappedCongaField,,\n"
+        "4. NO EXTRA TEXT: Do NOT include ANY text, notes, explanations, apologies, or conversational remarks (e.g., do not write 'No exact match found' in a cell) before, after, or within the CSV data cells.\n"
+        "5. DELIMITERS: Use ONLY a single comma as a delimiter. Do not use tabs or multiple spaces.\n"
+        "6. QUOTES: Do not add quotes unless a value itself contains a comma that needs escaping.\n"
+        "Failure to follow this CSV format will render the output unusable. Each CongaField from the input list must appear exactly once in your CSV output.\n\n"
         "CSV Columns Definition:\n"
         "1. CongaField: The exact Conga merge field (from the list above, without the hint part).\n"
         "2. BoxField: The full, valid path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode, Contact.Account.Name). Use '$' prefix for global objects like $User or $Organization if present in the schema.\n"
         "3. FieldType: The data type (e.g., Text, Number, Date, Boolean, Picklist, Id, RichText, Lookup, MasterDetail, Email, Phone, Date, DateTime, Currency) from the schema for the BoxField.\n"
-        "If a match is not clear in the schema for a CongaField, leave its BoxField and FieldType columns BLANK. Do not invent field paths.\n"
+        "If a CongaField cannot be confidently mapped to an existing field in the provided schema, leave its BoxField and FieldType columns BLANK.\n"
         "Prioritize exact or very close name matches within the relevant SObject contexts identified by the hints.\n"
         "Example Row: Template_Account_Name,Account.Name,Text"
     )
     return prompt
 
-def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None):
+def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None, temperature=0.2): # Default temperature
     url = "https://api.box.com/2.0/ai/text_gen"
     headers = {"Authorization": f"Bearer {developer_token}", "Content-Type": "application/json"}
     items_payload = [{"type": "file", "id": str(grounding_file_id), "content_type": "text_content"}] if grounding_file_id else []
+    
     data = {"prompt": prompt, "items": items_payload}
     model_used_msg = "Using default Box AI model."
-    if model_id: data["model"] = model_id; model_used_msg = f"Using Box AI model: {model_id}"
+    if model_id: 
+        data["model"] = model_id
+        model_used_msg = f"Using Box AI model: {model_id}"
+    if temperature is not None: 
+        data["temperature"] = temperature 
+        model_used_msg += f" with temperature: {temperature}"
     
     st.info(model_used_msg); 
     displayed_data = data.copy()
-    if len(json.dumps(displayed_data.get("prompt", ""))) > 1000:
+    if len(json.dumps(displayed_data.get("prompt", ""))) > 1000: # Truncate long prompts in UI
         displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display for brevity)"
     st.info("Box AI Request Payload (see console for full details if large):"); st.json(displayed_data) 
 
-    print(f"--- Sending Box AI Request ---\nURL: {url}\nModel: {data.get('model', 'Default')}\nPayload Len: {len(json.dumps(data))}\n-----------------------------")
+    print(f"--- Sending Box AI Request ---\nURL: {url}\nModel: {data.get('model', 'Default')}\nTemperature: {data.get('temperature', 'Not Set')}\nPayload Len: {len(json.dumps(data))}\n-----------------------------")
     response = requests.post(url, headers=headers, json=data)
     print(f"--- Received Box AI Response (Status: {response.status_code}) ---")
     resp_text = None
@@ -332,7 +345,7 @@ def convert_response_to_df(text):
     for i, line in enumerate(lines):
         line_lower = line.lower()
         if all(eh.lower() in line_lower for eh in expected_hdrs_check) and \
-           not any(mf_prefix.lower() in line_lower for mf_prefix in ["account_", "case_", "contact_", "user_"]):
+           not any(mf_prefix.lower() in line_lower for mf_prefix in ["account_", "case_", "contact_", "user_", "$system", "today"]):
             header_idx = i; break
     final_cols = ["CongaField", "BoxField", "FieldType"]
     if header_idx == -1:
@@ -353,22 +366,24 @@ def convert_response_to_df(text):
         line_content_s = line_content.strip()
         if not line_content_s: continue
         if re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV|^\s*Example Row:", line_content_s, re.IGNORECASE) or \
-           (not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '('] and line_content_s.count(',') == 0 and len(line_content_s) < 20) :
+           (not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '(', '$'] and line_content_s.count(',') == 0 and len(line_content_s) < 20) : # Added '$' for system vars
             if line_content_s: st.info(f"Skipping non-data line: '{line_content_s}'"); continue
         
         split_vals = [v.strip() for v in line_content_s.split(",")]
-        if len(split_vals) == 1 and line_content_s.count(',') == 0 and len(re.split(r'\s{2,}|\\t', line_content_s)) >= 2 : # Allow tab as well
+        if len(split_vals) == 1 and line_content_s.count(',') == 0 and len(re.split(r'\s{2,}|\\t', line_content_s)) >= 2 :
             alt_split_vals = re.split(r'\s{2,}|\\t', line_content_s) 
             if len(alt_split_vals) >=2 and len(alt_split_vals) <=len(final_cols):
                 st.info(f"Line '{line_content_s}' has few commas, using multi-space/tab split -> {alt_split_vals}")
                 split_vals = alt_split_vals
         
         row_data_ordered = [""] * len(final_cols)
-        for i_val in range(len(final_cols)):
+        for i_val in range(len(final_cols)): # Iterate up to the number of final columns
             if i_val < len(split_vals):
+                # If this is the last column we expect AND there are more values in split_vals, join them
                 if i_val == len(final_cols) - 1 and len(split_vals) > len(final_cols):
                     row_data_ordered[i_val] = ",".join(split_vals[i_val:])
-                else: row_data_ordered[i_val] = split_vals[i_val]
+                else:
+                    row_data_ordered[i_val] = split_vals[i_val]
         
         if row_data_ordered[0]: data_list.append(dict(zip(final_cols, row_data_ordered)))
         elif any(val for val in row_data_ordered): st.info(f"Skipping row with empty CongaField: {row_data_ordered}")
@@ -391,6 +406,8 @@ with st.sidebar:
         st.write(f"Schema: {st.session_state.get('schema_file_name', 'Not selected')}")
         st.divider(); st.subheader("AI Configuration")
         selected_model_display_name = st.selectbox("Choose Box AI Model:", options=list(BOX_AI_MODELS_FOR_SELECTBOX.keys()), index=0, key="ai_model_selector")
+        ai_temperature = st.slider("AI Temperature (0.0=Deterministic, 1.0=Creative):", min_value=0.0, max_value=1.0, value=0.2, step=0.05, key="ai_temperature_slider")
+
     else: st.warning("Box client not initialized. File browsing/AI unavailable.")
 
 if st.button("Generate Field Mapping", key="generate_mapping_button"):
@@ -401,6 +418,8 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
     
     chosen_model_display_name = st.session_state.ai_model_selector 
     final_selected_model_id = BOX_AI_MODELS_FOR_SELECTBOX[chosen_model_display_name]
+    final_ai_temperature = st.session_state.ai_temperature_slider
+
 
     st.info("Processing files and generating mapping...")
     prog_bar = st.progress(0.0, text="Initializing...")
@@ -422,7 +441,13 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
 
         prog_bar.progress(0.5, text="Calling Box AI...");
         prompt = generate_prompt_single_call(merge_fields or [], sobject_to_fields_map, all_query_sobjects or [])
-        ai_resp = call_box_ai(prompt, schema_file_id, st.secrets["box"]["BOX_DEVELOPER_TOKEN"], final_selected_model_id)
+        ai_resp = call_box_ai(
+            prompt, 
+            schema_file_id, 
+            st.secrets["box"]["BOX_DEVELOPER_TOKEN"], 
+            final_selected_model_id,
+            temperature=final_ai_temperature
+        )
         prog_bar.progress(0.8, text="Processing AI response...");
         df_map = pd.DataFrame()
         if ai_resp: df_map = convert_response_to_df(ai_resp) 
