@@ -10,44 +10,94 @@ from boxsdk.exception import BoxAPIException
 
 st.set_page_config(page_title="Conga to Box Doc Gen", layout="centered")
 
-# --- AI Model Configuration ---
+# --- AI Model Configuration (Updated based on Box documentation) ---
 ALL_MODELS_WITH_DESC = {
-    "azure__openai__gpt_4_1_mini": "Azure OpenAI GPT-4.1 Mini: Lightweight multimodal model (Default for Box AI for Docs/Notes Q&A)",
-    "google__gemini_2_0_flash_lite_preview": "Google Gemini 2.0 Flash Lite: Lightweight multimodal model (Preview)",
-    "azure__openai__gpt_4o_mini": "Azure OpenAI GPT-4o Mini: Lightweight multimodal model",
-    "azure__openai__gpt_4o": "Azure OpenAI GPT-4o: Highly efficient multimodal model for complex tasks",
-    "azure__openai__gpt_4_1": "Azure OpenAI GPT-4.1: Highly efficient multimodal model for complex tasks",
-    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks", 
-    "azure__openai__gpt_o4-mini": "Azure OpenAI GPT o4-mini: Highly efficient multimodal model for complex tasks",
-    "google__gemini_2_5_pro_preview": "Google Gemini 2.5 Pro: Optimal for high-volume, high-frequency tasks (Preview)",
-    "google__gemini_2_5_flash_preview": "Google Gemini 2.5 Flash: Optimal for high-volume, high-frequency tasks (Preview)",
-    "google__gemini_2_0_flash_001": "Google Gemini 2.0 Flash: Optimal for high-volume, high-frequency tasks",
-    "google__gemini_1_5_flash_001": "Google Gemini 1.5 Flash: High volume tasks & latency-sensitive applications",
-    "google__gemini_1_5_pro_001": "Google Gemini 1.5 Pro: Foundation model for various multimodal tasks",
-    "aws__claude_3_haiku": "AWS Claude 3 Haiku: Tailored for various language tasks",
-    "aws__claude_3_sonnet": "AWS Claude 3 Sonnet: Advanced language tasks, comprehension & context handling",
-    "aws__claude_3_5_sonnet": "AWS Claude 3.5 Sonnet: Enhanced language understanding and generation",
-    "aws__claude_3_7_sonnet": "AWS Claude 3.7 Sonnet: Enhanced language understanding and generation",
-    "aws__titan_text_lite": "AWS Titan Text Lite: Advanced language processing, extensive contexts",
-    "ibm__llama_3_2_instruct": "IBM Llama 3.2 Instruct: Instruction-tuned text model for dialogue, retrieval, summarization",
-    "ibm__llama_3_2_90b_vision_instruct": "IBM Llama 3.2 90B Vision Instruct: Instruction-tuned vision model",
-    "ibm__llama_4_scout": "IBM Llama 4 Scout: Natively multimodal model for text and multimodal experiences",
-    "xai__grok_3_beta": "xAI Grok 3: Excels at data extraction, coding, summarization (Beta)",
-    "xai__grok_3_mini_beta": "xAI Grok 3 Mini: Lightweight model for logic-based tasks (Beta)"
+    # Azure OpenAI Models
+    "azure__openai__gpt_4_1_mini": "Azure OpenAI: Multimodal, lightweight tasks (Default for Box Hubs/Docs/Notes Q&A)",
+    "azure__openai__gpt_o3": "Azure OpenAI: Multimodal, complex, multi-step tasks (Beta)",
+    "azure__openai__gpt_o4-mini": "Azure OpenAI: Multimodal, complex, multi-step tasks (Chat, Beta)", # Similar to gpt_o3
+    "azure__openai__gpt_4_1": "Azure OpenAI: Multimodal, complex, multi-step tasks (Chat, Available)",
+    "azure__openai__gpt_4o_mini": "Azure OpenAI: Multimodal, lightweight tasks (Chat, Available)",
+    "azure__openai__gpt_4o": "Azure OpenAI: Multimodal, complex, multi-step tasks (Chat, Available)",
+    # Note: "azure__openai__text_embedding_ada_002" is an embedding model, not for text generation.
+
+    # Google Gemini Models
+    "google__gemini_2_5_pro_preview": "Google Gemini: Multimodal, high-volume, high-frequency tasks (Chat, Available, Preview)",
+    "google__gemini_2_5_flash_preview": "Google Gemini: Multimodal, high-volume, high-frequency tasks (Chat, Available, Preview)",
+    "google__gemini_2_0_flash_001": "Google Gemini: Multimodal, high-volume, high-frequency tasks (Chat, Available)",
+    "google__gemini_2_0_flash_lite_preview": "Google Gemini: Multimodal, lightweight tasks (Default for Box AI Extract, Chat, Available, Preview)", # Renamed from google__gemini_2_0_flash_lite
+    "google__gemini_1_5_flash_001": "Google Gemini: Multimodal, high volume & latency-sensitive (Available)",
+    "google__gemini_1_5_pro_001": "Google Gemini: Foundation model, various multimodal tasks (Chat, Available)",
+
+    # AWS Claude Models
+    "aws__claude_3_haiku": "AWS Claude 3 Haiku: Various language tasks, creative writing, conversational AI (Chat, Available)",
+    "aws__claude_3_sonnet": "AWS Claude 3 Sonnet: Advanced language tasks, comprehension, context handling (Chat, Available)",
+    "aws__claude_3_5_sonnet": "AWS Claude 3.5 Sonnet: Enhanced language understanding and generation (Chat, Available)",
+    "aws__claude_3_7_sonnet": "AWS Claude 3.7 Sonnet: Enhanced language understanding and generation (Chat, Available)", # Added from doc
+
+    # AWS Titan Models
+    "aws__titan_text_lite": "AWS Titan Text Lite: Advanced language processing, extensive contexts (Chat, Available)",
+
+    # IBM Llama Models
+    "ibm__llama_3_2_90b_vision_instruct": "IBM Llama 3.2 Vision: Document understanding, charts, image captioning (Chat, Available)", # Simplified desc
+    "ibm__llama_4_scout": "IBM Llama 4 Scout: Natively multimodal for text and multimodal experiences (Chat, Available)",
+    # "ibm__llama_3_2_instruct" was in user's original list but not on the Box page, keeping it commented for now
+    # "ibm__llama_3_2_instruct": "IBM Llama 3.2 Instruct: Instruction-tuned text model for dialogue, retrieval, summarization",
+
+
+    # xAI Grok Models (Customer-enabled)
+    "xai__grok_3_beta": "xAI Grok 3: Data extraction, coding, text summarization (Chat, Beta)",
+    "xai__grok_3_mini_beta": "xAI Grok 3 Mini: Lightweight, logic-based tasks (Chat, Beta)"
 }
+
+# Update ALLOWED_MODEL_IDS based on models suitable for text generation from the documentation
+# Prioritizing "Available" over "Beta" if functionality is similar for general text gen.
+# This list will populate the dropdown.
 ALLOWED_MODEL_IDS = [
-    "azure__openai__gpt_4o_mini", "azure__openai__gpt_4_1", "azure__openai__gpt_4_1_mini",
-    "google__gemini_1_5_pro_001", "google__gemini_1_5_flash_001", "google__gemini_2_0_flash_001",
-    "google__gemini_2_0_flash_lite_preview", "aws__claude_3_haiku", "aws__claude_3_sonnet",
-    "aws__claude_3_5_sonnet", "aws__claude_3_7_sonnet", "aws__titan_text_lite",
-    "ibm__llama_3_2_90b_vision_instruct", "ibm__llama_4_scout"
+    # Azure OpenAI
+    "azure__openai__gpt_4o_mini",
+    "azure__openai__gpt_4o",
+    "azure__openai__gpt_4_1",
+    "azure__openai__gpt_4_1_mini",
+    "azure__openai__gpt_o3",       # Beta
+    "azure__openai__gpt_o4-mini",  # Beta
+
+    # Google Gemini
+    "google__gemini_1_5_pro_001",
+    "google__gemini_1_5_flash_001",
+    "google__gemini_2_0_flash_001",
+    "google__gemini_2_0_flash_lite_preview", # Preview
+    "google__gemini_2_5_pro_preview",        # Preview
+    "google__gemini_2_5_flash_preview",      # Preview
+    
+    # AWS Claude
+    "aws__claude_3_haiku",
+    "aws__claude_3_sonnet",
+    "aws__claude_3_5_sonnet",
+    "aws__claude_3_7_sonnet",
+
+    # AWS Titan
+    "aws__titan_text_lite",
+
+    # IBM Llama
+    "ibm__llama_3_2_90b_vision_instruct", # This is multimodal but has "instruct" capabilities
+    "ibm__llama_4_scout",                # Natively multimodal, implies text generation
+
+    # xAI Grok (Customer-enabled)
+    "xai__grok_3_beta",                  # Beta
+    "xai__grok_3_mini_beta"              # Beta
 ]
-BOX_AI_MODELS_FOR_SELECTBOX = {"Default (Let Box Choose)": None}
+
+BOX_AI_MODELS_FOR_SELECTBOX = {"Default (Let Box Choose)": None} # Default option
 for model_id_val in ALLOWED_MODEL_IDS:
-    description = ALL_MODELS_WITH_DESC.get(model_id_val, "No description available")
-    display_name = f"{model_id_val} ({description.split(':')[0]})" 
+    description = ALL_MODELS_WITH_DESC.get(model_id_val, "Description not available.") # Fallback description
+    # Shorten description for display in selectbox if too long
+    short_desc = description.split(':')[0] + (f": {description.split(':')[1].split('.')[0]}" if ':' in description and '.' in description.split(':')[1] else "")
+    display_name = f"{model_id_val} ({short_desc})"
     BOX_AI_MODELS_FOR_SELECTBOX[display_name] = model_id_val
 # --- End AI Model Configuration ---
+
+# ... (The rest of your app.py code remains the same as the last complete version) ...
 
 # --- Function Definitions ---
 def get_box_client():
