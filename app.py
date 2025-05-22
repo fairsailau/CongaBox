@@ -288,7 +288,7 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
                     mf_core = mf_lower.replace("__c", "").replace("__pc","") 
                     if mf_core == q_field_core or mf_core in q_field_core or q_field_core in mf_core :
                         if sobj not in [s.split(" ")[0] for s in possible_sources]: possible_sources.append(f"{sobj} (related query field: {q_field})"); break 
-                if len(possible_sources) > 1: break # Limit hints per merge field
+                if len(possible_sources) > 1: break 
         hint = f" (Hint: Likely from SObject(s) - {'; '.join(possible_sources)[:200]})" if possible_sources else " (Hint: general search in schema needed)"
         merge_fields_str_list.append(f"- {mf}{hint}")
 
@@ -308,7 +308,9 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
         "3. Person Accounts: If the Salesforce org uses Person Accounts, CongaFields prefixed with 'ACCOUNT_PERSON' (e.g., ACCOUNT_PERSONBIRTHDATE, ACCOUNT_PERSONEMAIL) should map to the corresponding standard fields available on Person Accounts (e.g., Account.PersonBirthdate, Account.PersonEmail). These are standard fields, not custom fields ending in '__c'.\n"
         "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should generally map to fields on the '$User' global object (e.g., '$User.City') IF in the schema. If context implies a user from a related record (e.g., from 'Matter_Team_Members__c.User__r' if listed as a primary SObject), use that full valid path from the schema.\n"
         "5. System Fields: For fields like 'Today', use system variables like '$System.Today' for Date or DateTime if present/inferable.\n"
-        "6. Ambiguous 'ACCOUNT_' prefixed fields: For CongaFields starting with 'ACCOUNT_' that are not Person Account fields, first prioritize direct fields on the Account object from the schema. If not found, then consider fields on a primary related Contact or a custom 'Client' object if such relationships are evident in the 'Primary Salesforce SObjects' list and the schema.\n\n"
+        "6. Ambiguous 'ACCOUNT_' prefixed fields: For CongaFields starting with 'ACCOUNT_' that are not Person Account fields, first prioritize direct fields on the Account object from the schema. If not found, then consider fields on a primary related Contact or a custom 'Client' object if such relationships are evident in the 'Primary Salesforce SObjects' list and the schema.\n"
+        "7. CONTACT_ prefixed fields: For CongaFields prefixed 'CONTACT_', prioritize fields on the 'Contact' SObject from the schema. If not found directly, check for relationships to Contact from primary SObjects like 'Account' (e.g., 'Account.Primary_Contact__r.Email') or other relevant SObjects from the query list, using the schema file to verify paths.\n"
+        "8. Synonyms/Variations: If multiple CongaFields seem to map to the SAME Salesforce field (e.g., 'Conga_Phone' and 'Conga_Telephone' both could map to 'Contact.Phone'), create a separate row in the CSV for EACH CongaField, mapping both to that same Salesforce field.\n\n"
         "TASK:\n"
         "For EACH 'Conga Template Merge Field' from the list above, provide its corresponding Salesforce field path from the schema file. "
         "Use the hints next to each merge field and the SObject list to guide your search within the schema. The hints are suggestions; the schema file is authoritative. After identifying a potential BoxField, CRITICALLY RE-VERIFY that this exact path exists in the provided schema file. If it does not, the BoxField must be left blank.\n"
@@ -364,74 +366,85 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None, tempe
     if response.ok: return resp_text
     else: st.error(f"Box AI request failed: {response.status_code} — {response.text}"); return None
 
-def convert_response_to_df(text):
-    if not text or not isinstance(text, str): st.warning("AI response empty/invalid."); return pd.DataFrame()
-    csv_match = re.search(r"```(?:csv)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
-    csv_text = csv_match.group(1).strip() if csv_match else text.strip()
-    if csv_match: st.info("Extracted CSV block from AI response.")
-    else: st.info("No CSV markdown block found, parsing response as is.")
+def clean_ai_response_text(raw_text): # New function to pre-clean AI response
+    if not raw_text: return ""
+    
+    csv_match = re.search(r"```(?:csv)?\s*([\s\S]*?)\s*```", raw_text, re.IGNORECASE)
+    if csv_match:
+        text_to_clean = csv_match.group(1).strip()
+        st.info("Pre-cleaning: Extracted CSV block from AI response.")
+    else:
+        text_to_clean = raw_text.strip()
+        st.info("Pre-cleaning: No explicit CSV markdown block found, will clean entire response.")
+
+    cleaned_lines = []
+    for line in text_to_clean.splitlines():
+        line_stripped = line.strip()
+        
+        if not line_stripped: continue
+        if re.match(r"^\s*\(Note:|^\s*Here are|^\s*Please note|^\s*This CSV|^\s*Example Row:|^\s*Continuing with|^\s*For other fields|^\s*I found|^\s*Let's assume", line_stripped, re.IGNORECASE):
+            st.info(f"Pre-cleaning: Stripping commentary line: '{line_stripped}'")
+            continue
+        line_cleaned_further = re.sub(r"\s*\([\s\S]*?\)\s*$", "", line_stripped) # Remove trailing notes in parens
+        
+        if line_cleaned_further.strip():
+            cleaned_lines.append(line_cleaned_further)
+            
+    return "\n".join(cleaned_lines)
+
+def convert_response_to_df(text): # Uses the pre-cleaned text
+    if not text or not isinstance(text, str): st.warning("CSV text for parsing is empty/invalid."); return pd.DataFrame()
+    
+    # Text is now assumed to be cleaner, directly from clean_ai_response_text
+    csv_text = text 
+    st.info("Parsing cleaned AI response for CSV data.")
+
     lines = csv_text.strip().splitlines()
     header_idx = -1; expected_hdrs_check = ["CongaField", "BoxField"]
     for i, line in enumerate(lines):
         line_lower = line.lower()
-        # Header should contain key terms and NOT look like typical data (e.g. starting with "account_")
         if all(eh.lower() in line_lower for eh in expected_hdrs_check) and \
-           not any(line_lower.startswith(mf_prefix) for mf_prefix in ["account_", "case_", "contact_", "user_", "$system", "today"]):
+           not any(mf_prefix.lower() in line_lower for mf_prefix in ["account_", "case_", "contact_", "user_", "$system", "today"]):
             header_idx = i; break
     final_cols = ["CongaField", "BoxField", "FieldType"]
     if header_idx == -1:
-        st.warning(f"CSV header (CongaField, BoxField) not reliably found.")
-        # Attempt to find first non-comment line as header
+        st.warning(f"CSV header (CongaField, BoxField) not reliably found in cleaned text.")
         for i, line in enumerate(lines): 
-            if line.strip() and not re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV", line, re.IGNORECASE):
-                header_idx = i; st.info(f"Using line {i+1} as potential header: '{line}'"); break
+            if line.strip() and not re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV", line, re.IGNORECASE): # Check again, less strict
+                header_idx = i; st.info(f"Using line {i+1} as potential header from cleaned text: '{line}'"); break
         if header_idx == -1: 
-            st.error("No plausible header line found."); st.text_area("Processed AI Text", csv_text, height=100)
+            st.error("No plausible header line found in cleaned text."); st.text_area("Cleaned AI Text Attempted for Parsing", csv_text, height=100)
             return pd.DataFrame(columns=final_cols)
 
     header_from_ai_raw = [h.strip() for h in lines[header_idx].split(",")]
-    # Pad or truncate AI header to match our expected 3 columns for mapping purposes
     if len(header_from_ai_raw) < len(final_cols): header_from_ai_raw.extend([""] * (len(final_cols) - len(header_from_ai_raw)))
     elif len(header_from_ai_raw) > len(final_cols): header_from_ai_raw = header_from_ai_raw[:len(final_cols)]
 
     data_list = []
     for line_num, line_content in enumerate(lines[header_idx+1:]):
         line_content_s = line_content.strip()
-        if not line_content_s: continue # Skip empty lines
-        # Skip common AI comment/note patterns
-        if re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV|^\s*Example Row:", line_content_s, re.IGNORECASE) or \
-           (len(line_content_s)>0 and not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '(', '$'] and line_content_s.count(',') == 0 and len(line_content_s) < 20) :
-            if line_content_s: st.info(f"Skipping non-data line: '{line_content_s}'"); continue
+        if not line_content_s: continue
+        # Minimal skipping here as text should be pre-cleaned
         
         split_vals = [v.strip() for v in line_content_s.split(",")]
-        
-        # Heuristic for space/tab separated values if comma split yields too few columns
-        if len(split_vals) == 1 and line_content_s.count(',') == 0: # Only one "cell" from comma split
-            # Try splitting by 2+ spaces or a tab
+        if len(split_vals) == 1 and line_content_s.count(',') == 0 and len(re.split(r'\s{2,}|\\t', line_content_s)) >= 2 :
             alt_split_vals = re.split(r'\s{2,}|\\t', line_content_s) 
-            if len(alt_split_vals) >= 2 and len(alt_split_vals) <= len(final_cols): # If this yields a plausible number of columns
-                st.info(f"Line '{line_content_s}' had no commas, using multi-space/tab split -> {alt_split_vals}")
-                split_vals = alt_split_vals # Use this alternative split
+            if len(alt_split_vals) >=2 and len(alt_split_vals) <=len(final_cols):
+                st.info(f"Line '{line_content_s}' has few commas, using multi-space/tab split -> {alt_split_vals}")
+                split_vals = alt_split_vals
         
-        row_data_ordered = [""] * len(final_cols) # Initialize with empty strings for our 3 target columns
+        row_data_ordered = [""] * len(final_cols)
         for i_val in range(len(final_cols)): 
             if i_val < len(split_vals):
-                # If this is the last column we expect AND there are more values in split_vals, join them
                 if i_val == len(final_cols) - 1 and len(split_vals) > len(final_cols):
                     row_data_ordered[i_val] = ",".join(split_vals[i_val:])
                 else:
                     row_data_ordered[i_val] = split_vals[i_val]
         
-        if row_data_ordered[0]: # Only add if CongaField seems populated
-            data_list.append(dict(zip(final_cols, row_data_ordered)))
-        elif any(val for val in row_data_ordered): # If CongaField is empty but others have values
-             st.info(f"Skipping row with empty CongaField but other data: {row_data_ordered}")
+        if row_data_ordered[0]: data_list.append(dict(zip(final_cols, row_data_ordered)))
+        elif any(val for val in row_data_ordered): st.info(f"Skipping row with empty CongaField: {row_data_ordered}")
             
-    if not data_list: 
-        st.warning("No valid data rows extracted after filtering.")
-        st.text_area("Processed AI Text (for debugging)", csv_text, height=100) 
-        return pd.DataFrame(columns=final_cols)
-        
+    if not data_list: st.warning("No valid data rows extracted."); return pd.DataFrame(columns=final_cols)
     return pd.DataFrame(data_list, columns=final_cols)
 
 # --- Streamlit App UI & Main Logic ---
@@ -484,7 +497,7 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
 
         prog_bar.progress(0.5, text="Calling Box AI...");
         prompt = generate_prompt_single_call(merge_fields or [], sobject_to_fields_map, all_query_sobjects or [])
-        ai_resp = call_box_ai(
+        ai_resp_raw = call_box_ai(
             prompt, 
             schema_file_id, 
             st.secrets["box"]["BOX_DEVELOPER_TOKEN"], 
@@ -493,8 +506,13 @@ if st.button("Generate Field Mapping", key="generate_mapping_button"):
         )
         prog_bar.progress(0.8, text="Processing AI response...");
         df_map = pd.DataFrame()
-        if ai_resp: df_map = convert_response_to_df(ai_resp) 
+        if ai_resp_raw: 
+            st.text_area("Raw AI Response (for debugging):", ai_resp_raw, height=100)
+            ai_resp_cleaned = clean_ai_response_text(ai_resp_raw)
+            st.text_area("Cleaned AI Response for CSV Parsing (for debugging):", ai_resp_cleaned, height=100)
+            df_map = convert_response_to_df(ai_resp_cleaned) 
         else: st.warning("No response text from Box AI.")
+        
         prog_bar.progress(1.0, text="Completed!"); prog_bar.empty()
 
         if not df_map.empty:
