@@ -273,14 +273,17 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
         f"{all_query_sobjects_str}\n\n"
         "IMPORTANT INSTRUCTIONS:\n"
         "1. Schema Adherence: ALL BoxField paths MUST originate from the provided schema file. Do not invent fields or relationships.\n"
-        "2. Custom Fields: Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc', it might map to a Salesforce field ending in '__c' or '__pc'. Verify against the schema.\n"
-        "3. Person Accounts: If the schema indicates Person Account fields (e.g., Account.PersonEmail, Account.PersonBirthdate - standard fields, not custom), map 'ACCOUNT_PERSON...' CongaFields accordingly. These standard Person Account fields do NOT end in '__c'.\n"
-        "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should map to fields on the '$User' global object (e.g., '$User.City') IF in the schema. If context implies a user from a related record (e.g., 'Matter_Team_Members__c.User__r'), use that full path from the schema.\n"
-        "5. System Fields: For fields like 'Today', use system variables like '$System.Today' if appropriate and inferable from schema context as a Date/DateTime.\n\n"
+        "2. Custom Fields: Salesforce custom fields typically end in '__c'. If a CongaField ends in '__pc' (e.g., MyField__pc), search the schema for 'SObject.MyField__pc' first. If not found, then search for 'SObject.MyField__c'.\n"
+        "3. Person Accounts: If the Salesforce org uses Person Accounts, CongaFields prefixed with 'ACCOUNT_PERSON' (e.g., ACCOUNT_PERSONBIRTHDATE, ACCOUNT_PERSONEMAIL) should map to the corresponding standard fields available on Person Accounts (e.g., Account.PersonBirthdate, Account.PersonEmail). These are standard fields, not custom fields ending in '__c'.\n"
+        "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should generally map to fields on the '$User' global object (e.g., '$User.City') IF in the schema. If context implies a user from a related record (e.g., 'Matter_Team_Members__c.User__r'), use that full path from the schema.\n"
+        "5. System Fields: For fields like 'Today', use system variables like '$System.Today' if appropriate and inferable from schema context as a Date/DateTime.\n"
+        "6. Ambiguous 'ACCOUNT_' prefixed fields: For CongaFields starting with 'ACCOUNT_' that are not Person Account fields, first prioritize direct fields on the Account object from the schema. If not found, then consider fields on a primary related Contact or a custom 'Client' object if such relationships are evident in the 'Primary Salesforce SObjects' list and the schema.\n\n"
         "TASK:\n"
         "For EACH 'Conga Template Merge Field' from the list above, provide its corresponding Salesforce field path from the schema file. "
         "Use the hints next to each merge field and the SObject list to guide your search within the schema. The hints are suggestions; the schema file is authoritative.\n"
-        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data. Start with the exact header row 'CongaField,BoxField,FieldType', followed by data rows. Each CongaField from the input list must appear exactly once in your CSV output on its own row. Each data row MUST have exactly three values separated by single commas. Do NOT include ANY text, notes, explanations, apologies, or conversational remarks before, after, or within the CSV data cells themselves. If you are uncertain about a mapping for a CongaField, output the CongaField name in the first column, and leave the BoxField and FieldType columns COMPLETELY BLANK for that row. Example of a blank mapping: 'UncertainCongaField,,'\n\n"
+        "OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data. Start with the exact header row 'CongaField,BoxField,FieldType', followed by data rows. Each CongaField from the input list must appear exactly once in your CSV output on its own row. Each data row MUST have exactly three values separated by single commas. Do NOT include ANY text, notes, explanations, apologies, or conversational remarks before, after, or within the CSV data cells themselves. If you are uncertain about a mapping for a CongaField, output the CongaField name in the first column, and leave the BoxField and FieldType columns COMPLETELY BLANK for that row. Example of a blank mapping: 'UncertainCongaField,,'\n"
+        "Do not use tabs or multiple spaces as delimiters instead of commas. Do not add extra quotes unless a value itself contains a comma that needs escaping.\n"
+        "Failure to follow this CSV format will render the output unusable.\n\n"
         "CSV Columns Definition:\n"
         "1. CongaField: The exact Conga merge field (from the list above, without the hint part).\n"
         "2. BoxField: The full, valid path from the Salesforce Schema file (e.g., Account.Name, $User.Manager.FirstName, Opportunity.OpportunityLineItems.0.Product2.ProductCode, Contact.Account.Name). Use '$' prefix for global objects like $User or $Organization if present in the schema.\n"
@@ -334,7 +337,7 @@ def convert_response_to_df(text):
     final_cols = ["CongaField", "BoxField", "FieldType"]
     if header_idx == -1:
         st.warning(f"CSV header (CongaField, BoxField) not reliably found.")
-        for i, line in enumerate(lines): # Attempt to find any line that could be a header
+        for i, line in enumerate(lines): 
             if line.strip() and not re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV", line, re.IGNORECASE):
                 header_idx = i; st.info(f"Using line {i+1} as potential header: '{line}'"); break
         if header_idx == -1: 
@@ -342,7 +345,6 @@ def convert_response_to_df(text):
             return pd.DataFrame(columns=final_cols)
 
     header_from_ai_raw = [h.strip() for h in lines[header_idx].split(",")]
-    # Pad or truncate AI header to match our expected 3 columns
     if len(header_from_ai_raw) < len(final_cols): header_from_ai_raw.extend([""] * (len(final_cols) - len(header_from_ai_raw)))
     elif len(header_from_ai_raw) > len(final_cols): header_from_ai_raw = header_from_ai_raw[:len(final_cols)]
 
@@ -355,10 +357,10 @@ def convert_response_to_df(text):
             if line_content_s: st.info(f"Skipping non-data line: '{line_content_s}'"); continue
         
         split_vals = [v.strip() for v in line_content_s.split(",")]
-        if len(split_vals) == 1 and line_content_s.count(',') == 0 and len(re.split(r'\s{2,}', line_content_s)) >= 2 :
-            alt_split_vals = re.split(r'\s{2,}', line_content_s)
+        if len(split_vals) == 1 and line_content_s.count(',') == 0 and len(re.split(r'\s{2,}|\\t', line_content_s)) >= 2 : # Allow tab as well
+            alt_split_vals = re.split(r'\s{2,}|\\t', line_content_s) 
             if len(alt_split_vals) >=2 and len(alt_split_vals) <=len(final_cols):
-                st.info(f"Line '{line_content_s}' has few commas, using multi-space split -> {alt_split_vals}")
+                st.info(f"Line '{line_content_s}' has few commas, using multi-space/tab split -> {alt_split_vals}")
                 split_vals = alt_split_vals
         
         row_data_ordered = [""] * len(final_cols)
