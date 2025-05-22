@@ -10,94 +10,51 @@ from boxsdk.exception import BoxAPIException
 
 st.set_page_config(page_title="Conga to Box Doc Gen", layout="centered")
 
-# --- AI Model Configuration (Updated based on Box documentation) ---
+# --- AI Model Configuration ---
 ALL_MODELS_WITH_DESC = {
-    # Azure OpenAI Models
-    "azure__openai__gpt_4_1_mini": "Azure OpenAI: Multimodal, lightweight tasks (Default for Box Hubs/Docs/Notes Q&A)",
-    "azure__openai__gpt_o3": "Azure OpenAI: Multimodal, complex, multi-step tasks (Beta)",
-    "azure__openai__gpt_o4-mini": "Azure OpenAI: Multimodal, complex, multi-step tasks (Chat, Beta)", # Similar to gpt_o3
-    "azure__openai__gpt_4_1": "Azure OpenAI: Multimodal, complex, multi-step tasks (Chat, Available)",
-    "azure__openai__gpt_4o_mini": "Azure OpenAI: Multimodal, lightweight tasks (Chat, Available)",
-    "azure__openai__gpt_4o": "Azure OpenAI: Multimodal, complex, multi-step tasks (Chat, Available)",
-    # Note: "azure__openai__text_embedding_ada_002" is an embedding model, not for text generation.
-
-    # Google Gemini Models
-    "google__gemini_2_5_pro_preview": "Google Gemini: Multimodal, high-volume, high-frequency tasks (Chat, Available, Preview)",
-    "google__gemini_2_5_flash_preview": "Google Gemini: Multimodal, high-volume, high-frequency tasks (Chat, Available, Preview)",
-    "google__gemini_2_0_flash_001": "Google Gemini: Multimodal, high-volume, high-frequency tasks (Chat, Available)",
-    "google__gemini_2_0_flash_lite_preview": "Google Gemini: Multimodal, lightweight tasks (Default for Box AI Extract, Chat, Available, Preview)", # Renamed from google__gemini_2_0_flash_lite
-    "google__gemini_1_5_flash_001": "Google Gemini: Multimodal, high volume & latency-sensitive (Available)",
-    "google__gemini_1_5_pro_001": "Google Gemini: Foundation model, various multimodal tasks (Chat, Available)",
-
-    # AWS Claude Models
-    "aws__claude_3_haiku": "AWS Claude 3 Haiku: Various language tasks, creative writing, conversational AI (Chat, Available)",
-    "aws__claude_3_sonnet": "AWS Claude 3 Sonnet: Advanced language tasks, comprehension, context handling (Chat, Available)",
-    "aws__claude_3_5_sonnet": "AWS Claude 3.5 Sonnet: Enhanced language understanding and generation (Chat, Available)",
-    "aws__claude_3_7_sonnet": "AWS Claude 3.7 Sonnet: Enhanced language understanding and generation (Chat, Available)", # Added from doc
-
-    # AWS Titan Models
-    "aws__titan_text_lite": "AWS Titan Text Lite: Advanced language processing, extensive contexts (Chat, Available)",
-
-    # IBM Llama Models
-    "ibm__llama_3_2_90b_vision_instruct": "IBM Llama 3.2 Vision: Document understanding, charts, image captioning (Chat, Available)", # Simplified desc
-    "ibm__llama_4_scout": "IBM Llama 4 Scout: Natively multimodal for text and multimodal experiences (Chat, Available)",
-    # "ibm__llama_3_2_instruct" was in user's original list but not on the Box page, keeping it commented for now
-    # "ibm__llama_3_2_instruct": "IBM Llama 3.2 Instruct: Instruction-tuned text model for dialogue, retrieval, summarization",
-
-
-    # xAI Grok Models (Customer-enabled)
-    "xai__grok_3_beta": "xAI Grok 3: Data extraction, coding, text summarization (Chat, Beta)",
-    "xai__grok_3_mini_beta": "xAI Grok 3 Mini: Lightweight, logic-based tasks (Chat, Beta)"
+    "azure__openai__gpt_4_1_mini": "Azure OpenAI GPT-4.1 Mini: Lightweight multimodal model (Default for Box AI for Docs/Notes Q&A)",
+    "google__gemini_2_0_flash_lite_preview": "Google Gemini 2.0 Flash Lite: Lightweight multimodal model (Preview)",
+    "azure__openai__gpt_4o_mini": "Azure OpenAI GPT-4o Mini: Lightweight multimodal model",
+    "azure__openai__gpt_4o": "Azure OpenAI GPT-4o: Highly efficient multimodal model for complex tasks",
+    "azure__openai__gpt_4_1": "Azure OpenAI GPT-4.1: Highly efficient multimodal model for complex tasks",
+    "azure__openai__gpt_o3": "Azure OpenAI GPT o3: Highly efficient multimodal model for complex tasks", 
+    "azure__openai__gpt_o4-mini": "Azure OpenAI GPT o4-mini: Highly efficient multimodal model for complex tasks",
+    "google__gemini_2_5_pro_preview": "Google Gemini 2.5 Pro: Optimal for high-volume, high-frequency tasks (Preview)",
+    "google__gemini_2_5_flash_preview": "Google Gemini 2.5 Flash: Optimal for high-volume, high-frequency tasks (Preview)",
+    "google__gemini_2_0_flash_001": "Google Gemini 2.0 Flash: Optimal for high-volume, high-frequency tasks",
+    "google__gemini_1_5_flash_001": "Google Gemini 1.5 Flash: High volume tasks & latency-sensitive applications",
+    "google__gemini_1_5_pro_001": "Google Gemini 1.5 Pro: Foundation model for various multimodal tasks",
+    "aws__claude_3_haiku": "AWS Claude 3 Haiku: Tailored for various language tasks",
+    "aws__claude_3_sonnet": "AWS Claude 3 Sonnet: Advanced language tasks, comprehension & context handling",
+    "aws__claude_3_5_sonnet": "AWS Claude 3.5 Sonnet: Enhanced language understanding and generation",
+    "aws__claude_3_7_sonnet": "AWS Claude 3.7 Sonnet: Enhanced language understanding and generation",
+    "aws__titan_text_lite": "AWS Titan Text Lite: Advanced language processing, extensive contexts",
+    "ibm__llama_3_2_instruct": "IBM Llama 3.2 Instruct: Instruction-tuned text model for dialogue, retrieval, summarization",
+    "ibm__llama_3_2_90b_vision_instruct": "IBM Llama 3.2 90B Vision Instruct: Instruction-tuned vision model",
+    "ibm__llama_4_scout": "IBM Llama 4 Scout: Natively multimodal model for text and multimodal experiences",
+    "xai__grok_3_beta": "xAI Grok 3: Excels at data extraction, coding, summarization (Beta)",
+    "xai__grok_3_mini_beta": "xAI Grok 3 Mini: Lightweight model for logic-based tasks (Beta)"
 }
-
-# Update ALLOWED_MODEL_IDS based on models suitable for text generation from the documentation
-# Prioritizing "Available" over "Beta" if functionality is similar for general text gen.
-# This list will populate the dropdown.
 ALLOWED_MODEL_IDS = [
-    # Azure OpenAI
-    "azure__openai__gpt_4o_mini",
-    "azure__openai__gpt_4o",
-    "azure__openai__gpt_4_1",
-    "azure__openai__gpt_4_1_mini",
-    "azure__openai__gpt_o3",       # Beta
-    "azure__openai__gpt_o4-mini",  # Beta
-
-    # Google Gemini
-    "google__gemini_1_5_pro_001",
-    "google__gemini_1_5_flash_001",
-    "google__gemini_2_0_flash_001",
-    "google__gemini_2_0_flash_lite_preview", # Preview
-    "google__gemini_2_5_pro_preview",        # Preview
-    "google__gemini_2_5_flash_preview",      # Preview
-    
-    # AWS Claude
-    "aws__claude_3_haiku",
-    "aws__claude_3_sonnet",
-    "aws__claude_3_5_sonnet",
-    "aws__claude_3_7_sonnet",
-
-    # AWS Titan
+    "azure__openai__gpt_4o_mini", "azure__openai__gpt_4o", "azure__openai__gpt_4_1", "azure__openai__gpt_4_1_mini",
+    "azure__openai__gpt_o3", "azure__openai__gpt_o4-mini",
+    "google__gemini_1_5_pro_001", "google__gemini_1_5_flash_001", "google__gemini_2_0_flash_001",
+    "google__gemini_2_0_flash_lite_preview", "google__gemini_2_5_pro_preview", "google__gemini_2_5_flash_preview",
+    "aws__claude_3_haiku", "aws__claude_3_sonnet", "aws__claude_3_5_sonnet", "aws__claude_3_7_sonnet",
     "aws__titan_text_lite",
-
-    # IBM Llama
-    "ibm__llama_3_2_90b_vision_instruct", # This is multimodal but has "instruct" capabilities
-    "ibm__llama_4_scout",                # Natively multimodal, implies text generation
-
-    # xAI Grok (Customer-enabled)
-    "xai__grok_3_beta",                  # Beta
-    "xai__grok_3_mini_beta"              # Beta
+    "ibm__llama_3_2_90b_vision_instruct", "ibm__llama_4_scout",
+    "xai__grok_3_beta", "xai__grok_3_mini_beta"
 ]
-
-BOX_AI_MODELS_FOR_SELECTBOX = {"Default (Let Box Choose)": None} # Default option
+BOX_AI_MODELS_FOR_SELECTBOX = {"Default (Let Box Choose)": None}
 for model_id_val in ALLOWED_MODEL_IDS:
-    description = ALL_MODELS_WITH_DESC.get(model_id_val, "Description not available.") # Fallback description
-    # Shorten description for display in selectbox if too long
-    short_desc = description.split(':')[0] + (f": {description.split(':')[1].split('.')[0]}" if ':' in description and '.' in description.split(':')[1] else "")
+    description = ALL_MODELS_WITH_DESC.get(model_id_val, "No description available")
+    desc_parts = description.split(':')
+    short_desc = desc_parts[0]
+    if len(desc_parts) > 1 and len(desc_parts[1].split('.')) > 0:
+        short_desc += ": " + desc_parts[1].split('.')[0].strip()
     display_name = f"{model_id_val} ({short_desc})"
     BOX_AI_MODELS_FOR_SELECTBOX[display_name] = model_id_val
 # --- End AI Model Configuration ---
-
-# ... (The rest of your app.py code remains the same as the last complete version) ...
 
 # --- Function Definitions ---
 def get_box_client():
@@ -131,7 +88,19 @@ def get_folder_contents(client, folder_id):
     return folder, items
 
 def navigate_folders(client, current_folder_id):
-    folder, items = get_folder_contents(client, current_folder_id)
+    try:
+        folder, items = get_folder_contents(client, current_folder_id)
+    except BoxAPIException as e:
+        st.error(f"Error fetching folder {current_folder_id}: {e.message}")
+        if st.button("Retry Root Folder", key="retry_root_nav_err"): 
+            st.session_state.current_folder = "0"; st.rerun()
+        return 
+    except Exception as e:
+        st.error(f"An unexpected error occurred fetching folder contents: {str(e)}")
+        if st.button("Retry Root Folder", key="retry_root_nav_unexpected_err"):
+            st.session_state.current_folder = "0"; st.rerun()
+        return
+
     path_parts = []
     ancestor_tracer = folder
     while True:
@@ -139,6 +108,7 @@ def navigate_folders(client, current_folder_id):
            not ancestor_tracer.parent or \
            ancestor_tracer.parent.id == "0":
             break 
+        
         parent_ref = ancestor_tracer.parent
         try:
             parent_full_obj = client.folder(parent_ref.id).get(fields=["name", "parent"])
@@ -148,58 +118,69 @@ def navigate_folders(client, current_folder_id):
             st.warning(f"Could not get parent folder details for {parent_ref.id}: {e}")
             break
             
-    breadcrumb_cols = st.columns(len(path_parts) + 1) 
-    if breadcrumb_cols[0].button("Root", key="nav_root_button"):
-        st.session_state.current_folder = "0"
-        st.rerun()
-
+    bc_cols = st.columns(len(path_parts) + 2) 
+    if bc_cols[0].button("Root", key="nav_root_bc_btn", help="Go to Root folder"):
+        st.session_state.current_folder = "0"; st.rerun()
+    
     for i, part in enumerate(path_parts):
-        if breadcrumb_cols[i+1].button(part["name"], key=f"nav_breadcrumb_{part['id']}"):
-            st.session_state.current_folder = part["id"]
-            st.rerun()
-            
-    st.subheader(f"Folder: {folder.name}")
-    header_cols = st.columns([0.55, 0.15, 0.15, 0.15]) 
-    header_cols[0].write("Name")
-    header_cols[1].write("Type")
-    header_cols[2].write("Select") 
-    header_cols[3].write("Action")
+        if bc_cols[i+1].button(part["name"], key=f"nav_breadcrumb_btn_{part['id']}", help=f"Go to folder {part['name']}"):
+            st.session_state.current_folder = part["id"]; st.rerun()
+    
+    bc_cols[len(path_parts)+1].markdown(f"**Current: {folder.name}**") 
+    st.divider()
+
+    hdr_cols = st.columns([0.5, 0.15, 0.15, 0.2]) 
+    hdr_cols[0].markdown("**Name**")
+    hdr_cols[1].markdown("**Type**")
+    hdr_cols[2].markdown("**Select**") 
+    hdr_cols[3].markdown("**Action**")
 
     for item in items:
-        item_cols = st.columns([0.55, 0.15, 0.15, 0.15])
-        item_cols[0].write(f"{'📁' if item.type == 'folder' else '📄'} {item.name}")
+        item_cols = st.columns([0.5, 0.15, 0.15, 0.2])
+        
+        is_folder = item.type == "folder"
+        icon = "📁" if is_folder else "📄"
+        item_cols[0].write(f"{icon} {item.name}")
         item_cols[1].write(item.type.capitalize())
         
-        if item.type == "folder":
-            if item_cols[3].button("Open", key=f"open_folder_{item.id}", help=f"Open folder {item.name}"):
+        if is_folder:
+            item_cols[2].write("") 
+            if item_cols[3].button("Open", key=f"open_folder_{item.id}", help=f"Open folder {item.name}", use_container_width=True):
                  st.session_state.current_folder = item.id
                  st.rerun()
         else: 
+            item_cols[3].write("") 
             file_extension = item.name.split('.')[-1].lower() if '.' in item.name else ''
+            
             selected_as_template = st.session_state.get('template_file_id') == item.id
             selected_as_query = st.session_state.get('query_file_id') == item.id
             selected_as_schema = st.session_state.get('schema_file_id') == item.id
             checkbox_changed = False
             cb_key_suffix = item.id 
+
             if file_extension == 'docx':
-                new_val_template = item_cols[2].checkbox("T", key=f"cb_template_{cb_key_suffix}", value=selected_as_template, help="Select as Template")
-                if new_val_template != selected_as_template:
-                    if new_val_template: st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name
+                new_val = item_cols[2].checkbox("T", key=f"cb_template_{cb_key_suffix}", value=selected_as_template, help="Select as Template")
+                if new_val != selected_as_template:
+                    if new_val: st.session_state['template_file_id'] = item.id; st.session_state['template_file_name'] = item.name
                     else: st.session_state.pop('template_file_id', None); st.session_state.pop('template_file_name', None)
                     checkbox_changed = True
             elif file_extension in ['txt', 'csv']:
-                new_val_query = item_cols[2].checkbox("Q", key=f"cb_query_{cb_key_suffix}", value=selected_as_query, help="Select as Query File")
-                if new_val_query != selected_as_query:
-                    if new_val_query: st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
+                new_val = item_cols[2].checkbox("Q", key=f"cb_query_{cb_key_suffix}", value=selected_as_query, help="Select as Query File")
+                if new_val != selected_as_query:
+                    if new_val: st.session_state['query_file_id'] = item.id; st.session_state['query_file_name'] = item.name; st.session_state['query_file_type'] = file_extension
                     else: st.session_state.pop('query_file_id', None); st.session_state.pop('query_file_name', None); st.session_state.pop('query_file_type', None)
                     checkbox_changed = True
             elif file_extension == 'json':
-                new_val_schema = item_cols[2].checkbox("S", key=f"cb_schema_{cb_key_suffix}", value=selected_as_schema, help="Select as Schema File")
-                if new_val_schema != selected_as_schema:
-                    if new_val_schema: st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name
+                new_val = item_cols[2].checkbox("S", key=f"cb_schema_{cb_key_suffix}", value=selected_as_schema, help="Select as Schema File")
+                if new_val != selected_as_schema:
+                    if new_val: st.session_state['schema_file_id'] = item.id; st.session_state['schema_file_name'] = item.name
                     else: st.session_state.pop('schema_file_id', None); st.session_state.pop('schema_file_name', None)
                     checkbox_changed = True
-            if checkbox_changed: st.rerun()
+            else: 
+                item_cols[2].write("")
+
+            if checkbox_changed:
+                st.rerun()
 
 def download_box_file(client, file_id):
     return client.file(file_id).content()
@@ -307,7 +288,7 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
                     mf_core = mf_lower.replace("__c", "").replace("__pc","") 
                     if mf_core == q_field_core or mf_core in q_field_core or q_field_core in mf_core :
                         if sobj not in [s.split(" ")[0] for s in possible_sources]: possible_sources.append(f"{sobj} (related query field: {q_field})"); break 
-                if len(possible_sources) > 1: break 
+                if len(possible_sources) > 1: break # Limit hints per merge field
         hint = f" (Hint: Likely from SObject(s) - {'; '.join(possible_sources)[:200]})" if possible_sources else " (Hint: general search in schema needed)"
         merge_fields_str_list.append(f"- {mf}{hint}")
 
@@ -323,21 +304,21 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
         f"{all_query_sobjects_str}\n\n"
         "CRITICAL INSTRUCTIONS FOR ACCURACY AND FORMATTING:\n"
         "1. Schema is Truth: ALL 'BoxField' paths MUST EXACTLY match paths found in the provided Salesforce schema file. Do NOT invent fields, relationships, or suffixes (like adding '_c' if it's not in the schema for that field).\n"
-        "2. Custom Fields: Salesforce custom fields typically end in '__c'. If a CongaField ends in '__pc' (e.g., MyField__pc), search the schema for 'SObject.MyField__pc' first. If not found, then search for 'SObject.MyField__c'.\n"
-        "3. Person Accounts: If the schema indicates Person Account fields (e.g., Account.PersonEmail, Account.PersonBirthdate - these are standard fields, not custom), map 'ACCOUNT_PERSON...' CongaFields accordingly. These standard Person Account fields do NOT end in '__c'.\n"
-        "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should generally map to fields on the '$User' global object (e.g., '$User.City') IF such a field exists in the schema. If context implies a user from a related record (e.g., 'Matter_Team_Members__c.User__r'), use that full valid path from the schema.\n"
+        "2. Custom Fields: Salesforce custom fields usually end in '__c'. If a CongaField ends in '__pc' (e.g., MyField__pc), first search the schema for 'SObject.MyField__pc'. If not found, then search for 'SObject.MyField__c'.\n"
+        "3. Person Accounts: If the Salesforce org uses Person Accounts, CongaFields prefixed with 'ACCOUNT_PERSON' (e.g., ACCOUNT_PERSONBIRTHDATE, ACCOUNT_PERSONEMAIL) should map to the corresponding standard fields available on Person Accounts (e.g., Account.PersonBirthdate, Account.PersonEmail). These are standard fields, not custom fields ending in '__c'.\n"
+        "4. User Fields: CongaFields prefixed 'USER_' (e.g., USER_CITY) should generally map to fields on the '$User' global object (e.g., '$User.City') IF in the schema. If context implies a user from a related record (e.g., from 'Matter_Team_Members__c.User__r' if listed as a primary SObject), use that full valid path from the schema.\n"
         "5. System Fields: For fields like 'Today', use system variables like '$System.Today' for Date or DateTime if present/inferable.\n"
-        "6. No Invention/Guessing: If you find a field in the schema that is a *close but not exact* match for a CongaField, and you are not highly confident, it is BETTER to leave the BoxField and FieldType BLANK for that CongaField. DO NOT output conditional text like '(if exists)' or notes within the BoxField/FieldType columns.\n\n"
+        "6. Ambiguous 'ACCOUNT_' prefixed fields: For CongaFields starting with 'ACCOUNT_' that are not Person Account fields, first prioritize direct fields on the Account object from the schema. If not found, then consider fields on a primary related Contact or a custom 'Client' object if such relationships are evident in the 'Primary Salesforce SObjects' list and the schema.\n\n"
         "TASK:\n"
         "For EACH 'Conga Template Merge Field' from the list above, provide its corresponding Salesforce field path from the schema file. "
-        "Use the hints and SObject list to guide your search within the schema. After identifying a potential BoxField, CRITICALLY RE-VERIFY that this exact path exists in the provided schema file. If it does not, the BoxField must be left blank.\n"
+        "Use the hints next to each merge field and the SObject list to guide your search within the schema. The hints are suggestions; the schema file is authoritative. After identifying a potential BoxField, CRITICALLY RE-VERIFY that this exact path exists in the provided schema file. If it does not, the BoxField must be left blank.\n"
         "STRICT OUTPUT FORMAT: Your entire response MUST BE ONLY VALID CSV data. "
         "1. Start with the exact header row: CongaField,BoxField,FieldType\n"
         "2. Each subsequent line is a data row. Each data row MUST correspond to one CongaField from the input list.\n"
         "3. Each data row MUST have exactly three values, separated by a SINGLE comma.\n"
         "   - Correct Mapped Row Example: ActualCongaField,Account.Actual_Salesforce_Field__c,Text\n"
         "   - Correct Unmapped Row Example: UnmappedCongaField,,\n"
-        "4. NO EXTRA TEXT: Do NOT include ANY text, notes, explanations, apologies, or conversational remarks before, after, or within the CSV data cells.\n"
+        "4. NO EXTRA TEXT: Do NOT include ANY text, notes, explanations, apologies, or conversational remarks (e.g., do not write 'No exact match found' in a cell) before, after, or within the CSV data cells.\n"
         "5. DELIMITERS: Use ONLY a single comma as a delimiter. Do not use tabs or multiple spaces.\n"
         "6. QUOTES: Do not add quotes unless a value itself contains a comma that needs escaping (standard CSV behavior).\n"
         "Failure to follow this CSV format will render the output unusable. Each CongaField from the input list must appear exactly once in your CSV output.\n\n"
@@ -350,7 +331,7 @@ def generate_prompt_single_call(merge_fields, sobject_to_fields_map, all_query_s
     )
     return prompt
 
-def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None, temperature=0.2): # Default temperature
+def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None, temperature=0.2):
     url = "https://api.box.com/2.0/ai/text_gen"
     headers = {"Authorization": f"Bearer {developer_token}", "Content-Type": "application/json"}
     items_payload = [{"type": "file", "id": str(grounding_file_id), "content_type": "text_content"}] if grounding_file_id else []
@@ -366,7 +347,7 @@ def call_box_ai(prompt, grounding_file_id, developer_token, model_id=None, tempe
     
     st.info(model_used_msg); 
     displayed_data = data.copy()
-    if len(json.dumps(displayed_data.get("prompt", ""))) > 1000: # Truncate long prompts in UI
+    if len(json.dumps(displayed_data.get("prompt", ""))) > 1000:
         displayed_data["prompt"] = displayed_data["prompt"][:1000] + "...\n(Prompt truncated in UI display for brevity)"
     st.info("Box AI Request Payload (see console for full details if large):"); st.json(displayed_data) 
 
@@ -393,12 +374,14 @@ def convert_response_to_df(text):
     header_idx = -1; expected_hdrs_check = ["CongaField", "BoxField"]
     for i, line in enumerate(lines):
         line_lower = line.lower()
+        # Header should contain key terms and NOT look like typical data (e.g. starting with "account_")
         if all(eh.lower() in line_lower for eh in expected_hdrs_check) and \
-           not any(mf_prefix.lower() in line_lower for mf_prefix in ["account_", "case_", "contact_", "user_", "$system", "today"]):
+           not any(line_lower.startswith(mf_prefix) for mf_prefix in ["account_", "case_", "contact_", "user_", "$system", "today"]):
             header_idx = i; break
     final_cols = ["CongaField", "BoxField", "FieldType"]
     if header_idx == -1:
         st.warning(f"CSV header (CongaField, BoxField) not reliably found.")
+        # Attempt to find first non-comment line as header
         for i, line in enumerate(lines): 
             if line.strip() and not re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV", line, re.IGNORECASE):
                 header_idx = i; st.info(f"Using line {i+1} as potential header: '{line}'"); break
@@ -407,26 +390,31 @@ def convert_response_to_df(text):
             return pd.DataFrame(columns=final_cols)
 
     header_from_ai_raw = [h.strip() for h in lines[header_idx].split(",")]
+    # Pad or truncate AI header to match our expected 3 columns for mapping purposes
     if len(header_from_ai_raw) < len(final_cols): header_from_ai_raw.extend([""] * (len(final_cols) - len(header_from_ai_raw)))
     elif len(header_from_ai_raw) > len(final_cols): header_from_ai_raw = header_from_ai_raw[:len(final_cols)]
 
     data_list = []
     for line_num, line_content in enumerate(lines[header_idx+1:]):
         line_content_s = line_content.strip()
-        if not line_content_s: continue
+        if not line_content_s: continue # Skip empty lines
+        # Skip common AI comment/note patterns
         if re.match(r"^\s*\(Note:|\*\s|---|^\s*Here are|^\s*Please note|^\s*This CSV|^\s*Example Row:", line_content_s, re.IGNORECASE) or \
-           (not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '(', '$'] and line_content_s.count(',') == 0 and len(line_content_s) < 20) : # Added '$' for system vars
+           (len(line_content_s)>0 and not line_content_s[0].isalnum() and line_content_s[0] not in ['{', '"', '(', '$'] and line_content_s.count(',') == 0 and len(line_content_s) < 20) :
             if line_content_s: st.info(f"Skipping non-data line: '{line_content_s}'"); continue
         
         split_vals = [v.strip() for v in line_content_s.split(",")]
-        if len(split_vals) == 1 and line_content_s.count(',') == 0 and len(re.split(r'\s{2,}|\\t', line_content_s)) >= 2 :
-            alt_split_vals = re.split(r'\s{2,}|\\t', line_content_s) 
-            if len(alt_split_vals) >=2 and len(alt_split_vals) <=len(final_cols):
-                st.info(f"Line '{line_content_s}' has few commas, using multi-space/tab split -> {alt_split_vals}")
-                split_vals = alt_split_vals
         
-        row_data_ordered = [""] * len(final_cols)
-        for i_val in range(len(final_cols)): # Iterate up to the number of final columns
+        # Heuristic for space/tab separated values if comma split yields too few columns
+        if len(split_vals) == 1 and line_content_s.count(',') == 0: # Only one "cell" from comma split
+            # Try splitting by 2+ spaces or a tab
+            alt_split_vals = re.split(r'\s{2,}|\\t', line_content_s) 
+            if len(alt_split_vals) >= 2 and len(alt_split_vals) <= len(final_cols): # If this yields a plausible number of columns
+                st.info(f"Line '{line_content_s}' had no commas, using multi-space/tab split -> {alt_split_vals}")
+                split_vals = alt_split_vals # Use this alternative split
+        
+        row_data_ordered = [""] * len(final_cols) # Initialize with empty strings for our 3 target columns
+        for i_val in range(len(final_cols)): 
             if i_val < len(split_vals):
                 # If this is the last column we expect AND there are more values in split_vals, join them
                 if i_val == len(final_cols) - 1 and len(split_vals) > len(final_cols):
@@ -434,10 +422,16 @@ def convert_response_to_df(text):
                 else:
                     row_data_ordered[i_val] = split_vals[i_val]
         
-        if row_data_ordered[0]: data_list.append(dict(zip(final_cols, row_data_ordered)))
-        elif any(val for val in row_data_ordered): st.info(f"Skipping row with empty CongaField: {row_data_ordered}")
+        if row_data_ordered[0]: # Only add if CongaField seems populated
+            data_list.append(dict(zip(final_cols, row_data_ordered)))
+        elif any(val for val in row_data_ordered): # If CongaField is empty but others have values
+             st.info(f"Skipping row with empty CongaField but other data: {row_data_ordered}")
             
-    if not data_list: st.warning("No valid data rows extracted."); return pd.DataFrame(columns=final_cols)
+    if not data_list: 
+        st.warning("No valid data rows extracted after filtering.")
+        st.text_area("Processed AI Text (for debugging)", csv_text, height=100) 
+        return pd.DataFrame(columns=final_cols)
+        
     return pd.DataFrame(data_list, columns=final_cols)
 
 # --- Streamlit App UI & Main Logic ---
